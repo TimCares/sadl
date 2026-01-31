@@ -116,7 +116,6 @@ make version           # Show current version
 make bump              # Preview next version bump (dry-run)
 make bump-apply        # Apply version bump (creates commit and tag)
 make changelog         # Generate/update CHANGELOG.md
-make changelog-preview # Preview changelog changes
 make release-dry       # Preview full release process
 make release           # Full release (requires GH_TOKEN)
 ```
