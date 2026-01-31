@@ -1,0 +1,61 @@
+# =============================================================================
+# Pre-commit Configuration
+# =============================================================================
+# Install hooks: make pre-commit-install
+# Run manually:  make pre-commit
+# =============================================================================
+
+repos:
+  # -------------------------------------------------------------------------
+  # Code Quality (using local uv to match Makefile exactly)
+  # -------------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check (lint)
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+        require_serial: true
+
+      - id: mypy
+        name: mypy (typecheck)
+        entry: uv run mypy
+        language: system
+        types: [python]
+        require_serial: true
+        pass_filenames: false
+        args: ["."]
+
+  # -------------------------------------------------------------------------
+  # Commit Message Validation (Commitizen)
+  # -------------------------------------------------------------------------
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.1.0
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+      - id: commitizen-branch
+        stages: [pre-push]
+
+  # -------------------------------------------------------------------------
+  # General Checks
+  # -------------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      - id: check-merge-conflict
+      - id: debug-statements

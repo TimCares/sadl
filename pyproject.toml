@@ -1,0 +1,226 @@
+[project]
+name = "sadl"
+version = "0.1.0"
+description = "Simple Autograd Deep Learning: A minimal, readable deep learning framework built on NumPy"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Tim Cares" }]
+keywords = [
+    "deep-learning",
+    "machine-learning",
+    "autograd",
+    "automatic-differentiation",
+    "neural-networks",
+    "numpy",
+    "educational",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: GPU :: NVIDIA CUDA",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Typing :: Typed",
+]
+
+dependencies = [
+    "numpy>=2.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
+    "pytest>=8.3.0",
+    "pytest-cov>=6.0.0",
+    "python-semantic-release>=9.0.0",
+    "commitizen>=4.0.0",
+    "pre-commit>=4.0.0",
+]
+gpu = [
+    "cupy-cuda12x>=13.0.0",
+]
+gpu-cuda11 = [
+    "cupy-cuda11x>=13.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/timcares/sadl"
+Documentation = "https://github.com/timcares/sadl#readme"
+Repository = "https://github.com/timcares/sadl"
+Issues = "https://github.com/timcares/sadl/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# When extracting sadl as a standalone package, move this pyproject.toml
+# to the parent directory and rename the sadl folder accordingly:
+#
+# standalone-repo/
+# ├── pyproject.toml
+# └── sadl/
+#     ├── __init__.py
+#     ├── src/
+#     ├── docs/
+#     └── README.md
+
+[tool.hatch.build.targets.wheel]
+packages = ["sadl"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "sadl/",
+    "pyproject.toml",
+]
+
+# =============================================================================
+# Ruff Configuration
+# =============================================================================
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["sadl"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM", "PL", "RUF", "D", "ANN", "N"]
+ignore = [
+    "D100",    # Missing docstring in public module
+    "D104",    # Missing docstring in public package
+    "D105",    # Missing docstring in magic method
+    "D107",    # Missing docstring in __init__
+    "D203",    # 1 blank line required before class docstring
+    "D213",    # Multi-line docstring summary should start at second line
+    "ANN002",  # Missing type annotation for *args
+    "ANN003",  # Missing type annotation for **kwargs
+    "ANN204",  # Missing return type annotation for special method
+    "ANN401",  # Dynamically typed expressions (Any) disallowed
+    "N806",    # Variable in function should be lowercase (allow math notation)
+    "PLW0603", # Using global statement (needed for gradient mode)
+    "PLR0912", # Too many branches (parameter traversal)
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**/*.py" = ["S101", "ANN", "D", "ARG", "PLR2004"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true
+
+# =============================================================================
+# MyPy Configuration
+# =============================================================================
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_ignores = true
+show_error_codes = true
+show_column_numbers = true
+pretty = true
+
+[[tool.mypy.overrides]]
+module = ["cupy.*"]
+ignore_missing_imports = true
+
+# =============================================================================
+# Pytest Configuration
+# =============================================================================
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_functions = ["test_*"]
+addopts = ["-v", "--tb=short", "-ra"]
+
+# =============================================================================
+# Coverage Configuration
+# =============================================================================
+[tool.coverage.run]
+source = ["sadl"]
+branch = true
+omit = ["tests/*", "*/__init__.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+fail_under = 80
+show_missing = true
+
+# =============================================================================
+# Semantic Release Configuration
+# =============================================================================
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+branch = "main"
+build_command = "uv build"
+commit_message = "chore(release): v{version}"
+tag_format = "v{version}"
+
+[tool.semantic_release.commit_parser_options]
+minor_tags = ["feat"]
+patch_tags = ["fix", "perf"]
+parse_squash_commits = true
+ignore_merge_commits = true
+
+[tool.semantic_release.changelog]
+exclude_commit_patterns = [
+    '''chore(?:\([^)]*?\))?: .+''',
+    '''ci(?:\([^)]*?\))?: .+''',
+    '''refactor(?:\([^)]*?\))?: .+''',
+    '''style(?:\([^)]*?\))?: .+''',
+    '''test(?:\([^)]*?\))?: .+''',
+    '''build\((?!deps\): .+)''',
+    '''Initial [Cc]ommit.*''',
+    '''Merge .+''',
+]
+
+[tool.semantic_release.changelog.default_templates]
+changelog_file = "CHANGELOG.md"
+output_format = "md"
+
+[tool.semantic_release.remote]
+type = "github"
+name = "origin"
+
+[tool.semantic_release.remote.token]
+env = "GH_TOKEN"
+
+# =============================================================================
+# Commitizen Configuration
+# =============================================================================
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "1.0.0"
+version_files = ["pyproject.toml:project.version"]
+tag_format = "v$version"
+update_changelog_on_bump = false
+changelog_incremental = true
+style = [
+    ["qmark", "fg:#ff9d00 bold"],
+    ["question", "bold"],
+    ["answer", "fg:#ff9d00 bold"],
+    ["pointer", "fg:#ff9d00 bold"],
+    ["highlighted", "fg:#ff9d00 bold"],
+    ["selected", "fg:#cc5454"],
+    ["separator", "fg:#cc5454"],
+    ["instruction", ""],
+    ["text", ""],
+    ["disabled", "fg:#858585 italic"],
+]
