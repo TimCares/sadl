@@ -129,17 +129,6 @@ make bump-minor        # Bump minor version (x.X.0)
 make bump-major        # Bump major version (X.0.0)
 ```
 
-### CI/CD Integration
-
-For GitHub Actions, set up the `GH_TOKEN` secret with a personal access token that has `contents` write permission. The release workflow will:
-
-1. Analyze commits since the last release
-2. Determine the appropriate version bump
-3. Update the version in `pyproject.toml`
-4. Generate/update the changelog
-5. Create a git tag
-6. Optionally create a GitHub release
-
 ## Building and Publishing
 
 ### Build Package
