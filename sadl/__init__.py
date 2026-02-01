@@ -3,19 +3,25 @@
 A minimal, readable deep learning framework built on NumPy/CuPy.
 """
 
-from .src import (
+from . import grad_ops
+from .backend import (
     BACKEND,
-    SGD,
+    TensorDevice,
+)
+from .function import (
     Function,
     Linear,
     Mlp,
-    Optimizer,
-    Parameter,
     ReLU,
     Sigmoid,
+)
+from .optimizer import (
+    SGD,
+    Optimizer,
+)
+from .tensor import (
+    Parameter,
     Tensor,
-    TensorDevice,
-    grad_ops,
     load,
     no_grad,
     no_grad_fn,
@@ -26,22 +32,28 @@ from .src import (
 )
 
 __all__ = [
+    # Backend
     "BACKEND",
     "SGD",
+    # Neural network layers
     "Function",
     "Linear",
     "Mlp",
+    # Optimizers
     "Optimizer",
     "Parameter",
     "ReLU",
     "Sigmoid",
+    # Tensor and autograd
     "Tensor",
     "TensorDevice",
+    # Gradient operations (advanced)
     "grad_ops",
     "load",
     "no_grad",
     "no_grad_fn",
     "ones_like",
+    # Serialization
     "save",
     "tensor",
     "zeros_like",
