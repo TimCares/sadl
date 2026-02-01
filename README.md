@@ -1,6 +1,13 @@
-# SADL: Simple Autograd Deep Learning
+<p align="center">
+  <img src="assets/sadl_icon_light.png" alt="SADL Logo" width="200">
+</p>
 
-SADL is a minimal, readable deep learning framework built on NumPy and CuPy. It provides automatic differentiation, neural network primitives, and optimization algorithms in approximately 2000 lines of Python code.
+<h1 align="center">SADL: Simple Autograd Deep Learning</h1>
+
+<p align="center">
+  A minimal, readable deep learning framework built on NumPy and CuPy.<br>
+  Automatic differentiation, neural network primitives, and optimization in ~2000 lines of Python.
+</p>
 
 ## Installation
 
