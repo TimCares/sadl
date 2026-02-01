@@ -7,6 +7,11 @@ from . import grad_ops
 from .backend import (
     BACKEND,
     TensorDevice,
+    xp,
+)
+from .disk import (
+    load,
+    save,
 )
 from .function import (
     Function,
@@ -15,6 +20,11 @@ from .function import (
     ReLU,
     Sigmoid,
 )
+from .ops import (
+    copy_to_device,
+    ones_like,
+    zeros_like,
+)
 from .optimizer import (
     SGD,
     Optimizer,
@@ -22,39 +32,35 @@ from .optimizer import (
 from .tensor import (
     Parameter,
     Tensor,
-    load,
+    get_current_global_grad_mode,
     no_grad,
     no_grad_fn,
-    ones_like,
-    save,
+    set_global_grad_mode,
     tensor,
-    zeros_like,
 )
 
 __all__ = [
-    # Backend
     "BACKEND",
     "SGD",
-    # Neural network layers
     "Function",
     "Linear",
     "Mlp",
-    # Optimizers
     "Optimizer",
     "Parameter",
     "ReLU",
     "Sigmoid",
-    # Tensor and autograd
     "Tensor",
     "TensorDevice",
-    # Gradient operations (advanced)
+    "copy_to_device",
+    "get_current_global_grad_mode",
     "grad_ops",
     "load",
     "no_grad",
     "no_grad_fn",
     "ones_like",
-    # Serialization
     "save",
+    "set_global_grad_mode",
     "tensor",
+    "xp",
     "zeros_like",
 ]

@@ -11,7 +11,7 @@
 
 ## Installation
 
-We recommend using [uv](https://docs.astral.sh/uv/) for fast, reliable Python package management.
+Using [uv](https://docs.astral.sh/uv/) for installation is recommended.
 
 ```bash
 # Install with uv (recommended)

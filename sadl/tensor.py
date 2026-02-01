@@ -3,11 +3,7 @@
 from __future__ import annotations
 
 import logging
-import struct
-from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, ParamSpec, Self, TypeVar
-
-import numpy as np
 
 from .backend import BACKEND, TensorDevice, xp
 from .grad_ops import GradOp, get_grad_op, normalize_grad_op_name
@@ -61,6 +57,28 @@ class no_grad:  # noqa: N801
     ) -> None:
         global _GRAD_MODE_ENABLED
         _GRAD_MODE_ENABLED = self.prev
+
+
+def set_global_grad_mode(enabled: bool) -> None:
+    """Sets the global grad mode to `enabled`.
+
+    Args:
+        enabled (bool): Whether to enable or disable
+            gradient tracking.
+    """
+    global _GRAD_MODE_ENABLED
+    _GRAD_MODE_ENABLED = enabled
+    logger.debug(f"Gradient tracking {'enabled' if enabled else 'disabled'}")
+
+
+def get_current_global_grad_mode() -> bool:
+    """Gets the current global grad mode.
+
+    Returns:
+        bool: Whether gradient tracking is
+            enabled or disabled.
+    """
+    return _GRAD_MODE_ENABLED
 
 
 def no_grad_fn(fn: Callable[P, T]) -> Callable[P, T]:
@@ -162,33 +180,7 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
         Returns:
             Tensor: A tensor with the same data, now on `device`.
         """
-        new_device_array = copy_array(array=self, device=device)
-
-        # Check if this is a non-leaf tensor in an active computation graph
-        # (like intermediate activations in multi-GPU scenarios)
-        src_requires_grad = [s.requires_grad for s in self.src]
-        is_in_graph = (
-            _GRAD_MODE_ENABLED
-            and self.requires_grad
-            and len(self.src) > 0
-            and any(src_requires_grad)
-        )
-
-        # __array_finalize__ sets defaults from new_device_array (plain xp.ndarray),
-        # so we manually set attributes
-        result: Tensor = new_device_array.view(Tensor)
-
-        if is_in_graph:
-            # Tracked operation: gradients flow back through device transfer
-            result.src = (self,)
-            result.backward_fn = get_grad_op("copy_to_device")
-            result.requires_grad = True
-        else:
-            # Utility operation for leaf tensors
-            result.requires_grad = self.requires_grad
-
-        result.keep_grad = self.keep_grad
-        return result
+        return _copy_to_device(tensor=self, device=device)
 
     def detach(
         self,
@@ -482,213 +474,60 @@ def tensor(
     return result
 
 
-def ones_like(
-    other: Tensor,
-    *,
-    dtype: Any = None,
-    requires_grad: bool = False,
-) -> Tensor:
-    """Create a Tensor of ones with the same shape and device as `other`.
+def _copy_to_device(tensor: Tensor, device: TensorDevice) -> Tensor:
+    """Copy tensor data to `device`.
+
+    For intermediate tensors in a computation graph (non-leaf with sources
+    that require grad), this is a tracked operation so gradients flow back.
+    For leaf tensors, this is a utility operation.
+
+    Note: If the Tensor already is on `device`, no copy is created. Instead,
+    the Tensor is returned as is.
 
     Args:
-        other (Tensor): The tensor to match shape and device from.
-        dtype (Any): Override dtype. Defaults to None (use other's dtype).
-        requires_grad (bool): Whether to track gradients. Defaults to False.
+        tensor (Tensor): The tensor to copy to `device`.
+        device (TensorDevice): The device to copy to. Should either
+            be `cpu` or an integer specifying the GPU id.
 
     Returns:
-        Tensor: A tensor of ones.
+        Tensor: A tensor with the same data, now on `device`.
     """
-    # Use xp.ones(shape) instead of xp.ones_like(tensor) to avoid
-    # triggering __array_function__ on the Tensor
-    result: Tensor = xp.ones(other.shape, dtype=dtype or other.dtype).view(Tensor)
-    result.requires_grad = _GRAD_MODE_ENABLED and requires_grad
-    return result
+    new_device_array = copy_array(array=tensor, device=device)
 
+    # Check if this is a non-leaf tensor in an active computation graph
+    # (like intermediate activations in multi-GPU scenarios)
+    src_requires_grad = [s.requires_grad for s in tensor.src]
+    is_in_graph = (
+        _GRAD_MODE_ENABLED
+        and tensor.requires_grad
+        and len(tensor.src) > 0
+        and any(src_requires_grad)
+    )
 
-def zeros_like(
-    other: Tensor,
-    *,
-    dtype: Any = None,
-    requires_grad: bool = False,
-) -> Tensor:
-    """Create a Tensor of zeros with the same shape and device as `other`.
+    # __array_finalize__ sets defaults from new_device_array (plain xp.ndarray),
+    # so we manually set attributes
+    result: Tensor = new_device_array.view(Tensor)
 
-    Args:
-        other (Tensor): The tensor to match shape and device from.
-        dtype (Any): Override dtype. Defaults to None (use other's dtype).
-        requires_grad (bool): Whether to track gradients. Defaults to False.
-
-    Returns:
-        Tensor: A tensor of zeros.
-    """
-    # Use xp.zeros(shape) instead of xp.zeros_like(tensor) to avoid
-    # triggering __array_function__ on the Tensor
-    result: Tensor = xp.zeros(other.shape, dtype=dtype or other.dtype).view(Tensor)
-    result.requires_grad = _GRAD_MODE_ENABLED and requires_grad
-    return result
-
-
-# ============================================================================
-# Custom binary serialization format (.sadl)
-# ============================================================================
-#
-# Format specification:
-# ┌──────────────────────────────────────────────────────────────────────────┐
-# │ HEADER                                                                   │
-# │   Magic bytes: "TIM\x00"                              (4 bytes)          │
-# │   Version: 1                                          (1 byte, uint8)    │
-# │   Num tensors: N                                      (4 bytes, uint32)  │
-# ├──────────────────────────────────────────────────────────────────────────┤
-# │ TENSOR ENTRIES (repeated N times)                                        │
-# │   Key length                                          (4 bytes, uint32)  │
-# │   Key (UTF-8 encoded)                                 (key_length bytes) │
-# │   Dtype string length                                 (1 byte, uint8)    │
-# │   Dtype string (e.g. "float32")                       (dtype_len bytes)  │
-# │   Ndim                                                (1 byte, uint8)    │
-# │   Shape (ndim x uint64)                               (8 * ndim bytes)   │
-# │   Data (raw bytes, C-contiguous)                      (variable)         │
-# └──────────────────────────────────────────────────────────────────────────┘
-
-
-_SADL_MAGIC = b"SADL"
-_SADL_VERSION = 1
-
-
-def _dtype_to_str(dtype: Any) -> str:
-    """Convert numpy/cupy dtype to string representation."""
-    return str(np.dtype(dtype).name)
-
-
-def _str_to_dtype(dtype_str: str) -> Any:
-    """Convert string back to numpy dtype."""
-    return np.dtype(dtype_str)
-
-
-def save(data: Tensor | OrderedDict[str, Tensor], file_path: str) -> None:
-    """Save Tensor data to disk using custom binary format.
-
-    Args:
-        data (Tensor | OrderedDict[str, Tensor]): The data to save,
-            can either be a single Tensor or an OrderedDict with strings
-            as keys and Tensors as values.
-        file_path (str): The file path to which to store the data. Must
-            end with ".sadl".
-
-    Raises:
-        ValueError: If an OrderedDict with non-Tensor values is passed.
-        ValueError: If file_path doesn't end with ".sadl".
-    """
-    if not file_path.endswith(".sadl"):
-        raise ValueError('file_path must end with ".sadl"')
-
-    # Normalize to OrderedDict
-    if isinstance(data, Tensor):
-        tensors = OrderedDict([("__single__", data)])
+    if is_in_graph:
+        # Tracked operation: gradients flow back through device transfer
+        result.src = (tensor,)
+        result.backward_fn = get_grad_op("copy_to_device")
+        result.requires_grad = True
     else:
-        if not all(isinstance(v, Tensor) for v in data.values()):
-            raise ValueError("If an OrderedDict is passed, all values must be Tensors.")
-        tensors = data
+        # Utility operation for leaf tensors
+        result.requires_grad = tensor.requires_grad
 
-    with open(file_path, "wb") as f:
-        # Write header
-        f.write(_SADL_MAGIC)
-        f.write(struct.pack("<B", _SADL_VERSION))  # uint8 version
-        f.write(struct.pack("<I", len(tensors)))  # uint32 num tensors
-
-        # Write each tensor
-        for key, tensor in tensors.items():
-            # Convert to numpy (CPU) for serialization
-            arr = np.asarray(tensor)
-            # Ensure C-contiguous
-            if not arr.flags["C_CONTIGUOUS"]:
-                arr = np.ascontiguousarray(arr)
-
-            # Key
-            key_bytes = key.encode("utf-8")
-            f.write(struct.pack("<I", len(key_bytes)))  # uint32 key length
-            f.write(key_bytes)
-
-            # Dtype
-            dtype_str = _dtype_to_str(arr.dtype)
-            dtype_bytes = dtype_str.encode("utf-8")
-            f.write(struct.pack("<B", len(dtype_bytes)))  # uint8 dtype length
-            f.write(dtype_bytes)
-
-            # Shape
-            f.write(struct.pack("<B", arr.ndim))  # uint8 ndim
-            f.writelines(struct.pack("<Q", dim) for dim in arr.shape)  # uint64 per dimension
-
-            # Raw data
-            f.write(arr.tobytes())
-
-
-def load(file_path: str) -> Tensor | OrderedDict[str, Tensor]:
-    """Load Tensor data from disk.
-
-    Args:
-        file_path (str): The file path from which to read the data. Must
-            end with ".sadl".
-
-    Raises:
-        ValueError: If file_path doesn't end with ".sadl".
-        ValueError: If file has invalid magic bytes or unsupported version.
-
-    Returns:
-        Tensor | OrderedDict[str, Tensor]: The loaded data. Returns a single
-            Tensor if one was saved, otherwise an OrderedDict.
-    """
-    if not file_path.endswith(".sadl"):
-        raise ValueError('file_path must end with ".sadl"')
-
-    with open(file_path, "rb") as f:
-        # Read and validate header
-        magic = f.read(4)
-        if magic != _SADL_MAGIC:
-            raise ValueError(f"Invalid file format. Expected SADL magic bytes, got {magic!r}")
-
-        version = struct.unpack("<B", f.read(1))[0]
-        if version != _SADL_VERSION:
-            raise ValueError(f"Unsupported version {version}. Expected {_SADL_VERSION}")
-
-        num_tensors = struct.unpack("<I", f.read(4))[0]
-
-        # Read tensors
-        tensors: OrderedDict[str, Tensor] = OrderedDict()
-        for _ in range(num_tensors):
-            # Key
-            key_length = struct.unpack("<I", f.read(4))[0]
-            key = f.read(key_length).decode("utf-8")
-
-            # Dtype
-            dtype_length = struct.unpack("<B", f.read(1))[0]
-            dtype_str = f.read(dtype_length).decode("utf-8")
-            dtype = _str_to_dtype(dtype_str)
-
-            # Shape
-            ndim = struct.unpack("<B", f.read(1))[0]
-            shape = tuple(struct.unpack("<Q", f.read(8))[0] for _ in range(ndim))
-
-            # Data
-            num_bytes = int(np.prod(shape)) * dtype.itemsize
-            data_bytes = f.read(num_bytes)
-            arr = np.frombuffer(data_bytes, dtype=dtype).reshape(shape)
-
-            tensors[key] = tensor(arr)
-
-        # Return single tensor if that's what was saved
-        if len(tensors) == 1 and "__single__" in tensors:
-            return tensors["__single__"]
-        return tensors
+    result.keep_grad = tensor.keep_grad
+    return result
 
 
 __all__ = [
     "Parameter",
     "Tensor",
-    "load",
+    "_copy_to_device",
+    "get_current_global_grad_mode",
     "no_grad",
     "no_grad_fn",
-    "ones_like",
-    "save",
+    "set_global_grad_mode",
     "tensor",
-    "zeros_like",
 ]
