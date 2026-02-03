@@ -1,11 +1,15 @@
 """Contains all operations that support gradient calculation.
 
 Uses numpy as the backend.
+
+The OpType enum is inspired by tinygrad's op categorization, thanks @tinygrad!
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from .backend import xp
@@ -19,80 +23,167 @@ if TYPE_CHECKING:
 # Gradients are raw numerical buffers without computation graph overhead
 GradOp = Callable[..., tuple["xp.ndarray | None", ...]]
 
-_GRAD_OPS_REGISTRY: dict[str, GradOp] = {}
+
+class OpType(Enum):
+    """Operation category by computational behavior.
+
+    Inspired by tinygrad's op categorization.
+    """
+
+    ELEMENTWISE = "elementwise"  # Point-wise: add, mul, sin, etc.
+    REDUCTION = "reduction"  # Dimension reduction: sum, mean, max, etc.
+    MOVEMENT = "movement"  # Data movement: copy_to_device, reshape, etc.
+    LINALG = "linalg"  # Linear algebra: matmul, etc.
 
 
-def register_grad_op(func: GradOp) -> GradOp:
-    """Decorator to register a grad operation to the global `GRAD_OPS_REGISTRY`.
+class OpInputs(Enum):
+    """Number of tensor inputs to an operation.
 
-    Expect `func` to have the naming convention `<operation>_backward`.
-    `func` will then be registered under the key `<operation>`.
+    The enum value equals the input count, e.g. `OpInputs.BINARY.value == 2`.
+    """
+
+    UNARY = 1
+    BINARY = 2
+    TERNARY = 3
+
+
+@dataclass(frozen=True)
+class GradOpSpec:
+    """Specification for a gradient operation.
+
+    Attributes:
+        backward_fn (GradOp): The gradient computation function.
+        op_type (OpType): Operation category (elementwise, reduction, etc.).
+        op_inputs (OpInputs): Number of inputs (unary, binary, ternary).
+        forward_names (tuple[str, ...]): Forward op names mapping to this backward.
+            First name is canonical, others are aliases.
+        constraints (dict[str, str] | None): Input constraints for testing.
+            Maps input name to constraint type, e.g. ``{"x": "positive"}``.
+        skip_test (bool): Whether to skip automated finite difference testing.
+        skip_reason (str | None): Reason for skipping. Required if skip_test=True.
+    """
+
+    backward_fn: GradOp
+    op_type: OpType
+    op_inputs: OpInputs
+    forward_names: tuple[str, ...]
+    constraints: dict[str, str] | None = None
+    skip_test: bool = False
+    skip_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validate that skip_reason is provided when skip_test is True.
+
+        Raises:
+            ValueError: If skip_test is True but skip_reason is None or empty.
+        """
+        if self.skip_test and not self.skip_reason:
+            raise ValueError("skip_reason is required when skip_test=True")
+
+
+# The registry maps forward op names to their gradient specifications
+_GRAD_OPS_REGISTRY: dict[str, GradOpSpec] = {}
+
+
+def register_grad_op(  # noqa: PLR0913
+    *,
+    op_type: OpType,
+    op_inputs: OpInputs,
+    forward_names: tuple[str, ...] | None = None,
+    constraints: dict[str, str] | None = None,
+    skip_test: bool = False,
+    skip_reason: str | None = None,
+) -> Callable[[GradOp], GradOp]:
+    """Decorator factory to register a gradient operation with metadata.
+
+    The decorated function should follow the naming convention ``<operation>_backward``.
+    It will be registered under all provided forward_names, or under the operation
+    name extracted from the function name if forward_names is None.
 
     Args:
-        func (GradOp): The grad operation to register.
+        op_type (OpType): Operation category (elementwise, reduction, etc.).
+        op_inputs (OpInputs): Number of tensor inputs (unary, binary, ternary).
+        forward_names (tuple[str, ...] | None): Forward op names to register under.
+            If None, extracted from function name.
+        constraints (dict[str, str] | None): Input constraints for testing.
+        skip_test (bool): Whether to skip automated finite difference testing.
+        skip_reason (str | None): Reason for skipping. Required if skip_test=True.
 
     Returns:
-        GradOp: The original `func`, same as input.
+        Callable[[GradOp], GradOp]: Decorator that registers the grad op.
+
+    Raises:
+        ValueError: If skip_test=True but skip_reason is not provided.
     """
-    operation_name = func.__name__.rsplit("_", maxsplit=1)[0]
-    _GRAD_OPS_REGISTRY[operation_name] = func
-    return func
+    if skip_test and not skip_reason:
+        raise ValueError("skip_reason is required when skip_test=True")
+
+    def decorator(func: GradOp) -> GradOp:
+        canonical_name = func.__name__.rsplit("_", maxsplit=1)[0]
+        names = forward_names if forward_names is not None else (canonical_name,)
+
+        spec = GradOpSpec(
+            backward_fn=func,
+            op_type=op_type,
+            op_inputs=op_inputs,
+            forward_names=names,
+            constraints=constraints,
+            skip_test=skip_test,
+            skip_reason=skip_reason,
+        )
+
+        for name in names:
+            _GRAD_OPS_REGISTRY[name] = spec
+
+        return func
+
+    return decorator
 
 
-def normalize_grad_op_name(
-    *,
-    name: str,
-    is_reduce: bool = False,
-) -> str:
-    """Normalizes the name of the op for which the backward function is requested.
+def normalize_grad_op_name(*, name: str, is_reduce: bool = False) -> str:
+    """Normalize operation name for registry lookup.
 
-    Allows to use the same backward function for multiple ops.
+    Handles the special case where "add" with is_reduce=True maps to "sum".
 
     Args:
-        name (str): The general op name.
-        is_reduce (bool): Whether the . Defaults to False.
+        name (str): The operation name.
+        is_reduce (bool): Whether the operation is a reduction.
+
+    Returns:
+        str: The normalized operation name.
 
     Examples:
-        Multiplication and division can have two
-        designations::
-
-            norm_name = _normalize_grad_op_name("multiply")
-            >>> norm_name == "mul"
-            norm_name = _normalize_grad_op_name("mul")
-            >>> norm_name == "mul"
-
-            norm_name = _normalize_grad_op_name("add", is_reduce=True)
-            >>> norm_name == "sum"
-
-            norm_name = _normalize_grad_op_name("add")
-            >>> norm_name == "add"
-
-    Returns:
-        str: The normalized name of the operation.
+        >>> normalize_grad_op_name(name="add", is_reduce=True)
+        "sum"
+        >>> normalize_grad_op_name(name="add", is_reduce=False)
+        "add"
     """
-    if name == "multiply":
-        return "mul"
-    if name == "divide":
-        return "div"
     if name == "add" and is_reduce:
         return "sum"
     return name
 
 
 def get_grad_op(name: str) -> GradOp | None:
-    """Gets the grad op by its forward name.
-
-    `name="add"` to get the backward function for addition,
-    `name="matmul"` for matrix multiplication, ...
+    """Get the backward function for a forward operation.
 
     Args:
-        name (str): Name of the forward op for which to get
-            the grad function.
+        name (str): Forward operation name (e.g. "add", "matmul").
 
     Returns:
-        GradOp | None: The grad op function, `None` if no
-            backward/gradient function exists for the
-            operation given by `name`.
+        GradOp | None: The gradient function, or None if not found.
+    """
+    spec = _GRAD_OPS_REGISTRY.get(normalize_grad_op_name(name=name))
+    return spec.backward_fn if spec is not None else None
+
+
+def get_grad_op_spec(name: str) -> GradOpSpec | None:
+    """Get the full specification for a gradient operation.
+
+    Args:
+        name (str): Forward operation name.
+
+    Returns:
+        GradOpSpec | None: The full specification, or None if not found.
     """
     return _GRAD_OPS_REGISTRY.get(normalize_grad_op_name(name=name))
 
@@ -169,7 +260,11 @@ def broadcastable(
     return wrapper
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+    forward_names=("absolute", "abs"),
+)
 def absolute_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -192,7 +287,10 @@ def absolute_backward(
     return (x_grad,)
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def negative_backward(
     *inputs: Tensor,  # noqa: ARG001
     compute_grad: tuple[bool],
@@ -214,7 +312,10 @@ def negative_backward(
     return (x_grad,)
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+)
 @broadcastable
 def add_backward(
     *inputs: Tensor,  # noqa: ARG001
@@ -242,7 +343,10 @@ def add_backward(
 # -> "x - y = x + (-y) = z", so we could chain the
 #   "negative" and "add" backward functions, but a single
 #   "substract" function is more efficient
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+)
 @broadcastable
 def subtract_backward(
     *inputs: Tensor,  # noqa: ARG001
@@ -266,7 +370,11 @@ def subtract_backward(
     return x_grad, y_grad
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    forward_names=("mul", "multiply"),
+)
 @broadcastable
 def mul_backward(
     *inputs: Tensor,
@@ -293,7 +401,12 @@ def mul_backward(
     return grad_x, grad_y
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    forward_names=("div", "divide"),
+    constraints={"y": "positive"},  # avoid division by zero
+)
 @broadcastable
 def div_backward(
     *inputs: Tensor,
@@ -320,7 +433,10 @@ def div_backward(
     return grad_x, grad_y
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.LINALG,
+    op_inputs=OpInputs.BINARY,
+)
 def matmul_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool, bool],
@@ -351,7 +467,11 @@ def matmul_backward(
     return grad_x, grad_y
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+    constraints={"x": "positive"},
+)
 def sqrt_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -375,7 +495,11 @@ def sqrt_backward(
     return (grad_x,)
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    constraints={"x": "positive"},  # avoid complex numbers with non-integer exponents
+)
 def power_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool, bool],
@@ -401,7 +525,10 @@ def power_backward(
     return grad_x, grad_y
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def square_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -425,7 +552,10 @@ def square_backward(
     return (grad_x,)
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def exp_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -449,7 +579,11 @@ def exp_backward(
     return (grad_x,)
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+    constraints={"x": "positive"},
+)
 def log_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -473,7 +607,10 @@ def log_backward(
     return (grad_x,)
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def sin_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -497,7 +634,10 @@ def sin_backward(
     return (grad_x,)
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def cos_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -521,7 +661,10 @@ def cos_backward(
     return (grad_x,)
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.REDUCTION,
+    op_inputs=OpInputs.UNARY,
+)
 def sum_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -557,7 +700,10 @@ def sum_backward(
     return (grad_x,)
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.REDUCTION,
+    op_inputs=OpInputs.UNARY,
+)
 def mean_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -666,7 +812,12 @@ def _extremum_backward(
     return (grad_x,)
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.REDUCTION,
+    op_inputs=OpInputs.UNARY,
+    skip_test=True,
+    skip_reason="requires x_mask computed during forward pass",
+)
 def max_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -709,7 +860,12 @@ def max_backward(
     )
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.REDUCTION,
+    op_inputs=OpInputs.UNARY,
+    skip_test=True,
+    skip_reason="requires x_mask computed during forward pass",
+)
 def min_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -823,7 +979,12 @@ def _element_wise_extremum_backward(
     return x_grad, y_grad
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    skip_test=True,
+    skip_reason="requires x_mask computed during forward pass",
+)
 @broadcastable
 def maximum_backward(
     *inputs: Tensor,
@@ -863,7 +1024,12 @@ def maximum_backward(
     )
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    skip_test=True,
+    skip_reason="requires x_mask computed during forward pass",
+)
 @broadcastable
 def minimum_backward(
     *inputs: Tensor,
@@ -903,7 +1069,12 @@ def minimum_backward(
     )
 
 
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.MOVEMENT,
+    op_inputs=OpInputs.UNARY,
+    skip_test=True,
+    skip_reason="not testable with finite differences",
+)
 def copy_to_device_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool],
@@ -978,6 +1149,10 @@ def make_axis(ndim: int, axis_candidate: Any) -> tuple[int, ...]:
 
 __all__ = [
     "GradOp",
+    "GradOpSpec",
+    "OpInputs",
+    "OpType",
     "get_grad_op",
+    "get_grad_op_spec",
     "register_grad_op",
 ]
