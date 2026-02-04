@@ -154,9 +154,9 @@ When operations are performed on Tensors with `requires_grad=True`, the graph bu
 
 1. The `Tensor` class overrides `__array_ufunc__` and `__array_function__` to intercept NumPy operations
 2. Each operation creates a new Tensor that stores:
-   - `src`: References to input tensors (the parents in the graph)
-   - `backward_fn`: The gradient function for this operation
-   - `op_ctx`: Any context needed for gradient computation (axis, masks, etc.)
+  - `src`: References to input tensors (the parents in the graph)
+  - `backward_fn`: The gradient function for this operation
+  - `op_ctx`: Any context needed for gradient computation (axis, masks, etc.)
 3. The graph grows dynamically as operations execute
 
 ```python
@@ -196,15 +196,12 @@ a   b
 When `optimizer.backward(loss)` is called:
 
 1. **Topological Sort**: The graph is traversed from the loss tensor to find all nodes, ordered so that each node appears after all nodes that depend on it. This uses an iterative stack-based algorithm to avoid recursion limits on deep graphs.
-
 2. **Gradient Propagation**: Starting from the loss (seeded with gradient 1.0), each node's `backward_fn` is called with:
-   - The input tensors (`src`)
-   - Which inputs need gradients (`compute_grad`)
-   - The upstream gradient (`grad_out`)
-   - Operation context (`op_ctx`)
-
+  - The input tensors (`src`)
+  - Which inputs need gradients (`compute_grad`)
+  - The upstream gradient (`grad_out`)
+  - Operation context (`op_ctx`)
 3. **Gradient Accumulation**: Gradients flow backward through the graph. When a tensor is used in multiple operations, gradients are summed.
-
 4. **Graph Cleanup**: After backpropagation, the graph structure is cleared to free memory. Parameter gradients are retained for the optimizer step.
 
 ### Gradient Operations Registry
@@ -238,10 +235,11 @@ sadl/
 ├── __init__.py         # Public API re-exports
 ├── README.md           # This file
 ├── docs/
-│   └── API_REFERENCE.md
+│   └── API_REFERENCE.md # additional references
 └── src/
     ├── __init__.py     # Internal exports
     ├── backend.py      # NumPy/CuPy abstraction
+    ├── disk.py         # Saving and loading data to disk
     ├── tensor.py       # Tensor, Parameter, serialization
     ├── grad_ops.py     # Gradient operation registry
     ├── function.py     # Neural network layers
