@@ -115,10 +115,6 @@ jobs:
       - name: Force branch to workflow SHA
         run: git reset --hard ${{ github.sha }}
 
-      # Step is needed, because build command specified in "pyproject.toml" is "uv build"
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-
       - name: Python Semantic Release
         id: release
         uses: python-semantic-release/python-semantic-release@v10.5.3
@@ -126,13 +122,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           git_committer_name: "github-actions"
           git_committer_email: "actions@users.noreply.github.com"
-
-      - name: Upload to GitHub Release Assets
-        uses: python-semantic-release/publish-action@v10.5.3
-        if: steps.release.outputs.released == 'true'
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ steps.release.outputs.tag }}
+          build: "false"  # Skip the build here, as the publish job does it after the checkout
 
   publish:
     name: Publish to PyPI
