@@ -1,3 +1,5 @@
+"""Code for serializing and deserializing data."""
+
 from __future__ import annotations
 
 import struct
@@ -6,63 +8,7 @@ from typing import Any
 
 import numpy as np
 
-from .backend import BACKEND, TensorDevice, xp
 from .tensor import Tensor, tensor
-
-
-def copy_array(array: xp.ndarray, device: TensorDevice) -> xp.ndarray:
-    """Copy an array to the specified device.
-
-    Args:
-        array (xp.ndarray): The array to copy.
-        device (TensorDevice): Target device, "cpu" or GPU id (int).
-
-    Raises:
-        ValueError: If device string is not "cpu".
-        ValueError: If using numpy backend and requesting a GPU device.
-
-    Returns:
-        xp.ndarray: The array on the target device, or the original if already there.
-    """
-    if array.device == device:
-        return array
-    if isinstance(device, str) and device != "cpu":
-        raise ValueError('Only "cpu" allowed as string device.')
-    if BACKEND == "numpy":
-        raise ValueError(
-            "Copying to another device is only possible when using cupy "
-            "as the backend. Currently, numpy is the backend. Please "
-            "check cupy and gpu availability."
-        )
-    # cupy:
-    if isinstance(device, int):
-        with xp.cuda.Device(device):
-            return xp.asarray(array)
-    else:
-        return xp.asnumpy(array)
-
-
-# ============================================================================
-# Custom binary serialization format (.sadl)
-# ============================================================================
-#
-# Format specification:
-# ┌──────────────────────────────────────────────────────────────────────────┐
-# │ HEADER                                                                   │
-# │   Magic bytes: "TIM\x00"                              (4 bytes)          │
-# │   Version: 1                                          (1 byte, uint8)    │
-# │   Num tensors: N                                      (4 bytes, uint32)  │
-# ├──────────────────────────────────────────────────────────────────────────┤
-# │ TENSOR ENTRIES (repeated N times)                                        │
-# │   Key length                                          (4 bytes, uint32)  │
-# │   Key (UTF-8 encoded)                                 (key_length bytes) │
-# │   Dtype string length                                 (1 byte, uint8)    │
-# │   Dtype string (e.g. "float32")                       (dtype_len bytes)  │
-# │   Ndim                                                (1 byte, uint8)    │
-# │   Shape (ndim x uint64)                               (8 * ndim bytes)   │
-# │   Data (raw bytes, C-contiguous)                      (variable)         │
-# └──────────────────────────────────────────────────────────────────────────┘
-
 
 _SADL_MAGIC = b"SADL"
 _SADL_VERSION = 1
