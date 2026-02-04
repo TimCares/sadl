@@ -13,25 +13,27 @@
 
 Using [uv](https://docs.astral.sh/uv/) for installation is recommended.
 
+(I had to name the pypi project `py-sadl` instead of `sadl`, because `sadl` was too similar to an existing project.)
+
 ```bash
 # Install with uv (recommended)
-uv add sadl
+uv add py-sadl
 
 # With GPU support (CUDA 12.x)
-uv add sadl --extra gpu
+uv add py-sadl --extra gpu
 
 # With GPU support (CUDA 11.x)
-uv add sadl --extra gpu-cuda11
+uv add py-sadl --extra gpu-cuda11
 ```
 
 Alternatively, using pip:
 
 ```bash
 # Install with pip
-pip install sadl
+pip install py-sadl
 
 # With GPU support
-pip install "sadl[gpu]"
+pip install "py-sadl[gpu]"
 ```
 
 ## Quick Start
@@ -232,19 +234,15 @@ Reductions: `sum`, `mean`, `max`, `min`
 
 ```
 sadl/
-├── __init__.py         # Public API re-exports
-├── README.md           # This file
-├── docs/
-│   └── API_REFERENCE.md # additional references
-└── src/
-    ├── __init__.py     # Internal exports
-    ├── backend.py      # NumPy/CuPy abstraction
-    ├── disk.py         # Saving and loading data to disk
-    ├── tensor.py       # Tensor, Parameter, serialization
-    ├── grad_ops.py     # Gradient operation registry
-    ├── function.py     # Neural network layers
-    ├── optimizer.py    # Optimizer base class, SGD, backpropagation
-    └── utils.py        # Device transfer utilities
+├── __init__.py     # Public API re-exports
+├── backend.py      # NumPy/CuPy abstraction
+├── disk.py         # Saving and loading data to/from disk
+├── tensor.py       # Tensor, Parameter, serialization
+├── grad_ops.py     # Gradient operation registry
+├── function.py     # Neural network layers
+├── optimizer.py    # Optimizer base class, SGD, backpropagation
+├── ops.py          # Array creation and device utilities
+└── utils.py        # Device transfer utilities
 ```
 
 ### Key Components
@@ -272,10 +270,14 @@ SADL uses a custom binary format (`.sadl` files) for efficient tensor storage:
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, commands, and guidelines.
 
+## Code of Conduct
+
+See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for behavior guidelines. The file was created using the [Contributor Covenant](https://www.contributor-covenant.org).
+
 ## Future Plans
 
 - Static graph compilation for repeated computations
-- Additional gradient operations (convolution, batch normalization, attention)
+- Additional layers and components (convolution, batch normalization, attention)
 - More optimizers (Adam, AdamW, RMSprop)
 - XLA compilation backend for TPU support
 - Automatic mixed precision training

@@ -17,6 +17,7 @@ repos:
         language: system
         types: [python]
         require_serial: true
+        exclude: ^(notebooks|tests)/
 
       - id: ruff-format
         name: ruff format
@@ -24,6 +25,7 @@ repos:
         language: system
         types: [python]
         require_serial: true
+        exclude: ^(notebooks|tests)/
 
       - id: mypy
         name: mypy (typecheck)
@@ -33,15 +35,15 @@ repos:
         require_serial: true
         pass_filenames: false
         args: ["."]
+        exclude: ^(notebooks|tests)/
 
   # -------------------------------------------------------------------------
   # Commit Message Validation (Commitizen)
   # -------------------------------------------------------------------------
   - repo: https://github.com/commitizen-tools/commitizen
-    rev: v4.1.0
+    rev: v4.13.4
     hooks:
       - id: commitizen
-        stages: [commit-msg]
       - id: commitizen-branch
         stages: [pre-push]
 

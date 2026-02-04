@@ -146,7 +146,7 @@ Distribution files are created in `dist/`.
 
 ```bash
 # Install from local build
-uv pip install dist/sadl-*.whl
+uv pip install dist/*.whl
 
 # Or install in editable mode
 uv pip install -e .
@@ -167,21 +167,22 @@ Both commands run `make check` and `make build` first to ensure code quality.
 ## Project Structure
 
 ```
-sadl/
-├── __init__.py         # Public API
+.
 ├── pyproject.toml      # Package configuration
 ├── README.md           # Documentation
 ├── CONTRIBUTING.md     # This file
 ├── Makefile            # Development commands
 ├── docs/
 │   └── API_REFERENCE.md
-└── src/
-    ├── __init__.py     # Internal exports
+└── sadl/
+    ├── __init__.py     # Public API re-exports
     ├── backend.py      # NumPy/CuPy abstraction
+    ├── disk.py         # Saving and loading data to disk
     ├── tensor.py       # Tensor, Parameter, serialization
     ├── grad_ops.py     # Gradient operation registry
     ├── function.py     # Neural network layers
     ├── optimizer.py    # Optimizer, SGD, backpropagation
+    ├── ops.py          # Array creation and device utilities
     └── utils.py        # Device transfer utilities
 ```
 
@@ -189,7 +190,7 @@ sadl/
 
 ### New Gradient Operation
 
-1. Add the backward function in `src/grad_ops.py`:
+1. Add the backward function in `sadl/grad_ops.py`:
 
 ```python
 @register_grad_op
@@ -203,7 +204,7 @@ def my_op_backward(*inputs, compute_grad, grad_out, **kwargs):
 
 ### New Layer
 
-1. Create a class in `src/function.py` that inherits from `Function`:
+1. Create a class in `sadl/function.py` that inherits from `Function`:
 
 ```python
 class MyLayer(Function):
@@ -214,11 +215,11 @@ class MyLayer(Function):
         return ...
 ```
 
-2. Export it in `src/__init__.py` and `__init__.py`.
+2. Export it in `sadl/__init__.py`.
 
 ### New Optimizer
 
-1. Create a class in `src/optimizer.py` that inherits from `Optimizer`:
+1. Create a class in `sadl/optimizer.py` that inherits from `Optimizer`:
 
 ```python
 class MyOptimizer(Optimizer):
@@ -230,4 +231,4 @@ class MyOptimizer(Optimizer):
 
 Optionally, if you need extra states, you should override `Optimizer.__init__` in you optimizer.
 
-2. Export it in `src/__init__.py` and `__init__.py`.
+2. Export it in `sadl/__init__.py`.

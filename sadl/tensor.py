@@ -110,7 +110,7 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
 
     def __init__(  # noqa: PLR0913
         self,
-        data: Any = None,  # noqa: ARG002 - Ignored, handled by __new__, needed for signature
+        data: Any = None,  # noqa: ARG002 -> Ignored, handled by __new__, needed for signature
         *,
         src: tuple[Tensor, ...] | None = None,
         creator_op: str | None = None,
@@ -305,7 +305,6 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
             creator_op=creator_op,
             op_ctx=track_kwargs,
             requires_grad=any(elem.requires_grad for elem in src),
-            **kwargs,
         )
 
     def __array_function__(
@@ -358,7 +357,6 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
             creator_op=func.__name__,
             op_ctx=track_kwargs,
             requires_grad=any(elem.requires_grad for elem in src),
-            **kwargs,
         )
 
 

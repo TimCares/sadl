@@ -3,7 +3,14 @@
 A minimal, readable deep learning framework built on NumPy/CuPy.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from . import grad_ops
+
+try:
+    __version__ = version("py-sadl")
+except PackageNotFoundError:
+    __version__ = "0.0.0.dev0"  # Fallback for uninstalled package
 from .backend import (
     BACKEND,
     TensorDevice,
@@ -51,6 +58,7 @@ __all__ = [
     "Sigmoid",
     "Tensor",
     "TensorDevice",
+    "__version__",
     "copy_to_device",
     "get_current_global_grad_mode",
     "grad_ops",
