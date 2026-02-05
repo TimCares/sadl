@@ -115,6 +115,12 @@ jobs:
       - name: Force branch to workflow SHA
         run: git reset --hard ${{ github.sha }}
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+          python-version: "3.13"
+
       - name: Python Semantic Release
         id: release
         uses: python-semantic-release/python-semantic-release@v10.5.3
@@ -122,7 +128,26 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           git_committer_name: "github-actions"
           git_committer_email: "actions@users.noreply.github.com"
-          build: "false"  # Skip the build here, as the publish job does it after the checkout
+          build: "false"
+
+      - name: Build package
+        if: steps.release.outputs.released == 'true'
+        run: uv build
+
+      - name: Upload to GitHub Release Assets
+        if: steps.release.outputs.released == 'true'
+        uses: python-semantic-release/publish-action@v10.5.3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          tag: ${{ steps.release.outputs.tag }}
+
+      - name: Upload distribution artifacts
+        if: steps.release.outputs.released == 'true'
+        uses: actions/upload-artifact@v6
+        with:
+          name: distribution-artifacts
+          path: dist/
+          if-no-files-found: error
 
   publish:
     name: Publish to PyPI
@@ -133,35 +158,17 @@ jobs:
       name: pypi
       url: https://pypi.org/project/py-sadl/
     permissions:
-      contents: write
       id-token: write
 
     steps:
-      - uses: actions/checkout@v6
-        with:
-          ref: ${{ needs.release.outputs.tag }}
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-        with:
-          enable-cache: true
-          python-version: "3.13"
-
-      - name: Build package
-        run: make build-only
-
-      - name: Upload to GitHub Release Assets
-        uses: python-semantic-release/publish-action@v10.5.3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          tag: ${{ needs.release.outputs.tag }}
-
-      - name: Upload distribution artifacts
-        uses: actions/upload-artifact@v6
+      - name: Download distribution artifacts
+        uses: actions/download-artifact@v7
         with:
           name: distribution-artifacts
           path: dist/
-          if-no-files-found: error
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
 
       - name: Publish to PyPI
         run: uv publish
