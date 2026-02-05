@@ -151,10 +151,14 @@ optimizer = sadl.SGD(params, lr=1e-3)
 
 The `grad_ops` module provides access to the gradient registry.
 
-| Function | Description |
-|----------|-------------|
+| Export | Description |
+|--------|-------------|
 | `get_grad_op(name)` | Get backward function by operation name |
-| `register_grad_op` | Decorator to register custom backward function |
+| `get_grad_op_spec(name)` | Get full `GradOpSpec` with metadata |
+| `register_grad_op` | Decorator factory to register backward function with metadata |
+| `OpType` | Enum: `ELEMENTWISE`, `REDUCTION`, `MOVEMENT`, `LINALG` |
+| `OpInputs` | Enum: `UNARY` (1), `BINARY` (2), `TERNARY` (3) |
+| `GradOpSpec` | Dataclass holding backward function and metadata |
 
 **Supported operations:**
 
@@ -165,7 +169,12 @@ The `grad_ops` module provides access to the gradient registry.
 ### Custom Gradient Example
 
 ```python
-@sadl.grad_ops.register_grad_op
+from sadl.grad_ops import register_grad_op, OpType, OpInputs
+
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def my_op_backward(*inputs, compute_grad, grad_out, **kwargs):
     x = inputs[0]
     grad_x = grad_out * 2 if compute_grad[0] else None

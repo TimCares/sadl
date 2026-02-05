@@ -208,10 +208,14 @@ When `optimizer.backward(loss)` is called:
 
 ### Gradient Operations Registry
 
-Each supported operation has a corresponding backward function registered in `grad_ops.py`:
+Each supported operation has a corresponding backward function registered in `grad_ops.py` with metadata (op type inspired by [tinygrad](https://github.com/tinygrad/tinygrad)):
 
 ```python
-@register_grad_op
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    forward_names=("mul", "multiply"),
+)
 @broadcastable
 def mul_backward(*inputs, compute_grad, grad_out):
     x, y = inputs

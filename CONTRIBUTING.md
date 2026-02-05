@@ -190,10 +190,16 @@ Both commands run `make check` and `make build` first to ensure code quality.
 
 ### New Gradient Operation
 
-1. Add the backward function in `sadl/grad_ops.py`:
+1. Add the backward function in `sadl/grad_ops.py` with required metadata:
 
 ```python
-@register_grad_op
+from sadl.grad_ops import register_grad_op, OpType, OpInputs
+
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,  # or REDUCTION, MOVEMENT, LINALG
+    op_inputs=OpInputs.UNARY,    # or BINARY, TERNARY
+    constraints={"x": "positive"},  # optional: for testing
+)
 def my_op_backward(*inputs, compute_grad, grad_out, **kwargs):
     x = inputs[0]
     grad_x = ... if compute_grad[0] else None
@@ -201,6 +207,7 @@ def my_op_backward(*inputs, compute_grad, grad_out, **kwargs):
 ```
 
 2. The operation will automatically be available for tensors.
+3. Tests will run automatically via the parametrized test in `tests/test_grad_ops.py`.
 
 ### New Layer
 
