@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.0.2 (2026-02-05)
+
+### Bug Fixes
+
+- **ci**: Reordered build strategy
+  ([`4969506`](https://github.com/TimCares/sadl/commit/49695067dec41bd9faff2872a31bf845e6707055))
+
+
 ## v1.0.1 (2026-02-05)
 
 ### Bug Fixes
