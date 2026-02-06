@@ -9,6 +9,9 @@
   Automatic differentiation, neural network primitives, and optimization in ~2000 lines of Python.
 </p>
 
+## Demo
+See [mnist_demo.ipynb](notebooks/mnist_demo.ipynb) for a working mini example of `sadl` on [mnist](https://huggingface.co/datasets/ylecun/mnist).
+
 ## Installation
 
 Using [uv](https://docs.astral.sh/uv/) for installation is recommended.
