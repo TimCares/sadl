@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.1.0 (2026-02-06)
+
+### Documentation
+
+- **notebook**: Fixed mnist demo
+  ([`17f4c32`](https://github.com/TimCares/sadl/commit/17f4c321b8de71f6faee20f46cf666e896a4dc36))
+
+### Features
+
+- **function**: Added Softmax and LogSoftmax
+  ([`18b0255`](https://github.com/TimCares/sadl/commit/18b02553754e89c7f34dd0cd32a2df89a6237979))
+
+
 ## v1.0.2 (2026-02-05)
 
 ### Bug Fixes
