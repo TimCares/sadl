@@ -153,6 +153,8 @@ def normalize_grad_op_name(*, name: str, is_reduce: bool = False) -> str:
         str: The normalized operation name.
 
     Examples:
+        >>> normalize_grad_op_name(name="power")
+        "power"
         >>> normalize_grad_op_name(name="add", is_reduce=True)
         "sum"
         >>> normalize_grad_op_name(name="add", is_reduce=False)
@@ -160,6 +162,10 @@ def normalize_grad_op_name(*, name: str, is_reduce: bool = False) -> str:
     """
     if name == "add" and is_reduce:
         return "sum"
+    if name == "maximum" and is_reduce:
+        return "max"  # "maximum" is element-wise maximum, "max" is the reduction
+    if name == "minimum" and is_reduce:
+        return "min"  # "minimum" is element-wise minimum, "min" is the reduction
     return name
 
 
@@ -500,6 +506,7 @@ def sqrt_backward(
     op_inputs=OpInputs.BINARY,
     constraints={"x": "positive"},  # avoid complex numbers with non-integer exponents
 )
+@broadcastable
 def power_backward(
     *inputs: Tensor,
     compute_grad: tuple[bool, bool],
@@ -692,10 +699,12 @@ def sum_backward(
     grad_x: xp.ndarray | None = None
 
     if compute_grad[0]:
-        kwargs_axis = kwargs.get("axis")
-        axis = tuple(kwargs_axis) if kwargs_axis is not None else tuple(range(x.ndim))
+        axis = make_axis(ndim=x.ndim, kwargs_dict=kwargs)
 
-        grad_x = xp.broadcast_to(xp.expand_dims(grad_out, axis=axis), shape=x.shape)
+        if not kwargs.get("keepdims", False):
+            grad_out = xp.expand_dims(grad_out, axis=axis)
+
+        grad_x = xp.broadcast_to(grad_out, shape=x.shape)
 
     return (grad_x,)
 
@@ -731,10 +740,12 @@ def mean_backward(
     grad_x: xp.ndarray | None = None
 
     if compute_grad[0]:
-        kwargs_axis = kwargs.get("axis")
-        axis = tuple(kwargs_axis) if kwargs_axis is not None else tuple(range(x.ndim))
+        axis = make_axis(ndim=x.ndim, kwargs_dict=kwargs)
 
-        grad_x = xp.broadcast_to(xp.expand_dims(grad_out, axis=axis), shape=x.shape)
+        if not kwargs.get("keepdims", False):
+            grad_out = xp.expand_dims(grad_out, axis=axis)
+
+        grad_x = xp.broadcast_to(grad_out, shape=x.shape)
 
         n_reduced_elem = xp.prod([x.shape[a] for a in axis])
 
@@ -787,11 +798,7 @@ def _extremum_backward(
 
     assert x_mask.shape == x.shape, "Extremum mask must have the same shape as x"
 
-    kwargs_axis = kwargs.get("axis")
-    if kwargs_axis is None:
-        axis = tuple(range(x.ndim))
-    else:
-        axis = make_axis(ndim=x.ndim, axis_candidate=kwargs_axis)
+    axis = make_axis(ndim=x.ndim, kwargs_dict=kwargs)
 
     if not kwargs.get("keepdims", False):
         grad_out = xp.expand_dims(grad_out, axis=axis)
@@ -1100,7 +1107,7 @@ def copy_to_device_backward(
     return (x_grad,)
 
 
-def make_axis(ndim: int, axis_candidate: Any) -> tuple[int, ...]:
+def make_axis(ndim: int, kwargs_dict: dict[str, Any]) -> tuple[int, ...]:
     """Transforms the `axis` argument for numpy ops.
 
     Returns a consistent `tuple[int, ...]` type.
@@ -1110,7 +1117,8 @@ def make_axis(ndim: int, axis_candidate: Any) -> tuple[int, ...]:
     Args:
         ndim (int): Number of dimensions of the array
             on which the numpy op is performed.
-        axis_candidate (Any): The `axis` argument
+        kwargs_dict (dict[str, Any]): The kwargs dictionary
+            potentially containing the `axis` argument/key
             used in the numpy op.
 
     Raises:
@@ -1121,6 +1129,10 @@ def make_axis(ndim: int, axis_candidate: Any) -> tuple[int, ...]:
         tuple[int, ...]: The consistent numpy `axis`
             argument.
     """
+    axis_candidate = kwargs_dict.get("axis")
+    if axis_candidate is None:
+        return tuple(range(ndim))
+
     if isinstance(axis_candidate, int):
         axis = (axis_candidate,)
     elif isinstance(axis_candidate, list) and all(isinstance(a, int) for a in axis_candidate):

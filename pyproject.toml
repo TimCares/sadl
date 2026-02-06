@@ -50,6 +50,7 @@ dev = [
     "jupyter>=1.1.1",
     "matplotlib>=3.10.8",
     "notebook>=7.5.3",
+    "datasets>=4.5.0",
 ]
 gpu = [
     "cupy-cuda12x>=13.0.0",

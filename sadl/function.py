@@ -317,6 +317,43 @@ class Sigmoid(Function):
         return cast("sadl.Tensor", 1 / (xp.exp(-x) + 1))
 
 
+class Softmax(Function):
+    """Softmax activation function."""
+
+    def __call__(self, x: sadl.Tensor) -> sadl.Tensor:  # type: ignore[override]
+        """Forward pass, computes the softmax activation function.
+
+        Args:
+            x (sadl.Tensor): Input
+
+        Returns:
+            sadl.Tensor: Transformed output
+        """
+        x = x - x.max(axis=-1, keepdims=True)  # for numerical stability
+        x = xp.exp(x)
+        return cast("sadl.Tensor", x / x.sum(axis=-1, keepdims=True))
+
+
+class LogSoftmax(Function):
+    """Fused application of softmax and logarithm for numerical stability.
+
+    Mathematically: `log(softmax(x))`.
+    """
+
+    def __call__(self, x: sadl.Tensor) -> sadl.Tensor:  # type: ignore[override]
+        """Forward pass, computes softmax followed by the logarithm.
+
+        Args:
+            x (sadl.Tensor): Input
+
+        Returns:
+            sadl.Tensor: Transformed output
+        """
+        x = x - x.max(axis=-1, keepdims=True)
+        x = x - xp.log(xp.sum(xp.exp(x), axis=-1, keepdims=True))
+        return x
+
+
 class ReLU(Function):
     """ReLU activation function."""
 
@@ -376,15 +413,11 @@ class Linear(Function):
         )
         x = xp.matmul(x, self.W)
         x = x + self.b if self.b is not None else x
-        return cast("sadl.Tensor", x)
+        return x
 
 
 class Mlp(Function):
-    """Mlp (Base Neural Network).
-
-    Args:
-        *layers (Function): A list of Functions.
-    """
+    """Multi-Layer-Perceptron."""
 
     def __init__(self, layers: list[Function]) -> None:
         self.layers = layers
@@ -409,7 +442,9 @@ class Mlp(Function):
 __all__ = [
     "Function",
     "Linear",
+    "LogSoftmax",
     "Mlp",
     "ReLU",
     "Sigmoid",
+    "Softmax",
 ]

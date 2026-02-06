@@ -277,7 +277,7 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
 
         func = getattr(ufunc, method)
 
-        if func.__name__ in ["maximum", "minimum"]:
+        if ufunc.__name__ in ["maximum", "minimum"] and method == "reduce":
             result = func(*xp_input_arrays, **kwargs)
             # create a mask for each axis, where True means the value in x
             #   at this position is an extremum (maximum or minimum, depending on "method"):
@@ -427,6 +427,9 @@ class Parameter(Tensor):
         Returns:
             Parameter: A Parameter with the same data, now on `device`.
         """
+        if self.device == device:
+            return self
+
         new_device_array = copy_array(array=self, device=device)
 
         # __array_finalize__ sets defaults, so we manually copy from self
@@ -490,6 +493,9 @@ def _copy_to_device(tensor: Tensor, device: TensorDevice) -> Tensor:
     Returns:
         Tensor: A tensor with the same data, now on `device`.
     """
+    if tensor.device == device:
+        return tensor
+
     new_device_array = copy_array(array=tensor, device=device)
 
     # Check if this is a non-leaf tensor in an active computation graph

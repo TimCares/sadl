@@ -23,9 +23,11 @@ from .disk import (
 from .function import (
     Function,
     Linear,
+    LogSoftmax,
     Mlp,
     ReLU,
     Sigmoid,
+    Softmax,
 )
 from .ops import (
     copy_to_device,
@@ -51,11 +53,13 @@ __all__ = [
     "SGD",
     "Function",
     "Linear",
+    "LogSoftmax",
     "Mlp",
     "Optimizer",
     "Parameter",
     "ReLU",
     "Sigmoid",
+    "Softmax",
     "Tensor",
     "TensorDevice",
     "__version__",
