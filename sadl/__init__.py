@@ -36,6 +36,7 @@ from .ops import (
 )
 from .optimizer import (
     SGD,
+    Adam,
     Optimizer,
 )
 from .tensor import (
@@ -51,6 +52,7 @@ from .tensor import (
 __all__ = [
     "BACKEND",
     "SGD",
+    "Adam",
     "Function",
     "Linear",
     "LogSoftmax",

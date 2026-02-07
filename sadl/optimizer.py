@@ -1,11 +1,14 @@
 import logging
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from collections.abc import Iterable, ValuesView
+from collections.abc import Callable, Iterable, ValuesView
 from itertools import chain
+
+from sadl.ops import zeros_like
 
 from .backend import TensorDevice, xp
 from .tensor import Parameter, Tensor, no_grad, no_grad_fn, tensor
+from .utils import traverse_attrs
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +61,7 @@ def toposort(root: Tensor) -> list[Tensor]:
 class Optimizer(ABC):
     """Abstract base class for all optimizers."""
 
-    def __init__(self, params: list[Parameter], lr: float = 1e-3):
+    def __init__(self, params: list[Parameter], *, lr: float = 1e-3):
         if len(params) == 0:
             raise ValueError("Must pass at least one parameter to optimize.")
         for param in params:
@@ -78,7 +81,24 @@ class Optimizer(ABC):
                 )
 
         self.params = params
-        self.lr = tensor(lr, device=self.params[0].device)
+        self.lr = tensor(lr)
+
+    def traverse_state(
+        self,
+        on_tensor: Callable[[str, Tensor], Tensor | None],
+    ) -> None:
+        """Recursively traverse all Tensors and optionally transform them.
+
+        Args:
+            on_tensor: Callback called for each Tensor with (path, param).
+                If it returns a Tensor, the original is replaced in-place.
+                If it returns None, no replacement occurs.
+        """
+        traverse_attrs(
+            self,
+            target_type=Tensor,
+            on_target=on_tensor,
+        )
 
     @property
     def device(self) -> tuple[TensorDevice] | None:
@@ -110,9 +130,11 @@ class Optimizer(ABC):
         Returns:
             Optimizer: self, for method chaining.
         """
-        for key, state_tensor in self.get_state().items():
-            setattr(self, key, state_tensor.copy_to_device(device))
 
+        def copy_tensor(_path: str, tensor: Tensor) -> Tensor:
+            return tensor.copy_to_device(device)
+
+        self.traverse_state(copy_tensor)
         return self
 
     # "no_grad_fn" technically not needed here, as optimizer state Tensors
@@ -133,11 +155,13 @@ class Optimizer(ABC):
         Returns:
             OrderedDict[str, Tensor]: Dict containing the state.
         """
-        state = OrderedDict[str, Tensor]()
-        for key, data in vars(self).items():
-            if isinstance(data, Tensor):
-                state[key] = data.copy_to_device(to_device) if to_device is not None else data
-        return state
+        result: OrderedDict[str, Tensor] = OrderedDict()
+
+        def collect_tensors(path: str, tensor: Tensor) -> None:
+            result[path] = tensor.copy_to_device(to_device) if to_device is not None else tensor
+
+        self.traverse_state(collect_tensors)
+        return result
 
     @property
     def state(self) -> ValuesView[Tensor]:
@@ -173,34 +197,42 @@ class Optimizer(ABC):
         Returns:
             Optimizer: self, for method chaining.
         """
-        for key, data in vars(self).items():
+
+        def load_tensor(key: str, tensor: Tensor) -> None:
             init_data = state.get(key, None)
             if init_data is None:
                 if not partial:
                     raise KeyError(f'Optimizer state "{key}" not found in passed state!')
-                continue
+                return
 
             if not isinstance(init_data, Tensor):
                 raise TypeError(
-                    'Data in passed state must be "Tensor", '
+                    'Data in passed state must be of type "Tensor", '
                     f'found "{type(init_data).__name__}" ({init_data})'
                 )
-            if data.shape != init_data.shape:
+
+            if tensor.shape != init_data.shape:
                 raise ValueError(
                     f"Shape of seed Tensor does not align with shape of "
-                    f'target parameter "{key}". Found "{data.shape}", '
+                    f'target parameter "{key}". Found "{tensor.shape}", '
                     f'expected "{init_data.shape}".'
                 )
+
             if match_device:
-                init_data = init_data.copy_to_device(data.device)
-            elif data.device != init_data.device:
+                init_data = init_data.copy_to_device(tensor.device)
+            elif tensor.device != init_data.device:
                 raise ValueError(
                     f"Device of seed Tensor does not align with device of "
                     f'target parameter "{key}". Found "{init_data.device}", '
-                    f'expected "{data.device}".'
+                    f'expected "{tensor.device}".'
                 )
-            setattr(self, key, init_data)
 
+            tensor[...] = init_data  # in-place assignment
+            # we do not return "init_data" here because we only want to
+            # modify the tensor **data** (the buffer), not the full object
+            return  # Don't replace
+
+        self.traverse_state(load_tensor)
         return self
 
     def _clear_graph(self, topo_nodes: Iterable[Tensor]) -> None:
@@ -345,8 +377,70 @@ class SGD(Optimizer):
             param -= self.lr * param.grad  # noqa: PLW2901
 
 
+class Adam(Optimizer):
+    """Adam optimizer."""
+
+    def __init__(
+        self,
+        params: list[Parameter],
+        *,
+        lr: float = 1e-3,
+        beta_1: float = 0.9,
+        beta_2: float = 0.999,
+        epsilon: float = 1e-8,
+    ):
+        """The Adam optimizer.
+
+        Args:
+            params (list[Parameter]): Parameters to optimize.
+            lr (float, optional): The learing rate, also called `alpha`
+                in the paper. Defaults to 1e-3.
+            beta_1 (float, optional): Exponential decay rate for
+                the momentum. Defaults to 0.9.
+            beta_2 (float, optional): Exponential decay rate for
+                the noise. Defaults to 0.999.
+            epsilon (float, optional): Value added to `v` to improve
+                numerical stability and avoid division by zero. Defaults to 1e-8.
+        """
+        super().__init__(params=params, lr=lr)
+        self.m: list[Tensor] = [
+            zeros_like(p, dtype=p.dtype, requires_grad=False) for p in self.params
+        ]
+        self.v: list[Tensor] = [
+            zeros_like(p, dtype=p.dtype, requires_grad=False) for p in self.params
+        ]
+        self.beta_1 = tensor(beta_1)
+        self.beta_2 = tensor(beta_2)
+        self.epsilon = tensor(epsilon)
+        self.t = tensor(0)
+
+    @no_grad_fn
+    def step(self) -> None:
+        """Performs a single Adam step.
+
+        Uses the slightly more efficient variant, which
+        can be found at the end of section 2 in the paper: https://arxiv.org/pdf/1412.6980
+
+        Raises:
+            ValueError: If a parameter has no gradient.
+        """
+        self.t = tensor(self.t + 1)
+
+        for idx, param in enumerate(self.params):
+            if param.grad is None:
+                raise ValueError("Gradient of parameter must not be None in step function")
+
+            self.m[idx] = self.beta_1 * self.m[idx] + (1 - self.beta_1) * param.grad
+            self.v[idx] = self.beta_2 * self.v[idx] + (1 - self.beta_2) * param.grad**2
+
+            lr_t = self.lr * xp.sqrt(1 - self.beta_2**self.t) / (1 - self.beta_1**self.t)
+
+            param -= lr_t * self.m[idx] / (xp.sqrt(self.v[idx]) + self.epsilon)  # noqa: PLW2901
+
+
 __all__ = [
     "SGD",
+    "Adam",
     "Optimizer",
     "toposort",
 ]

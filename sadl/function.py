@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 from .backend import TensorDevice, xp
 from .tensor import Parameter, no_grad_fn
+from .utils import traverse_attrs
 
 if TYPE_CHECKING:
     from collections.abc import Callable, ValuesView
@@ -60,55 +61,12 @@ class Function(ABC):
                 If it returns a Parameter, the original is replaced in-place.
                 If it returns None, no replacement occurs.
         """
-
-        def handle_item(
-            parent: Any,
-            key: str | int,
-            item: Any,
-            path: str,
-        ) -> None:
-            if isinstance(item, Parameter):
-                result = on_parameter(path, item)
-                if result is not None:
-                    # Replace the parameter in its parent container
-                    if isinstance(parent, dict):
-                        parent[key] = result
-                    elif isinstance(parent, list):
-                        parent[key] = result  # type: ignore[index]
-                    elif hasattr(parent, "__dict__") and isinstance(key, str):
-                        setattr(parent, key, result)
-                    # Note: tuples are immutable, can't replace items in them
-            elif isinstance(item, Function):
-                # Recurse into nested Functions
-                item.traverse_parameters(lambda p, param: on_parameter(f"{path}.{p}", param))
-            elif isinstance(item, set):
-                for elem in item:
-                    if isinstance(elem, (Parameter, Function)):
-                        raise TypeError(
-                            f'Found "{type(elem).__name__}" in property of type "set" '
-                            f'for path "{path}". Sets are not allowed for storing '
-                            f"Parameters or Functions (no stable ordering)."
-                        )
-            elif isinstance(item, tuple):
-                for i, elem in enumerate(item):
-                    if isinstance(elem, (Parameter, Function)):
-                        raise TypeError(
-                            f'Found "{type(elem).__name__}" in property of type "tuple" '
-                            f'for path "{path}[{i}]". Tuples are not allowed for storing '
-                            f"Parameters or Functions (immutable, cannot replace during "
-                            f"copy_to_device). Use a list instead."
-                        )
-                    # Still traverse nested structures (e.g., tuple containing a dict)
-                    handle_item(item, i, elem, f"{path}[{i}]")
-            elif isinstance(item, list):
-                for i, elem in enumerate(item):
-                    handle_item(item, i, elem, f"{path}[{i}]")
-            elif isinstance(item, dict):
-                for k, v in item.items():
-                    handle_item(item, k, v, f"{path}{{{k}}}")
-
-        for attr_name, attr_value in vars(self).items():
-            handle_item(self, attr_name, attr_value, attr_name)
+        traverse_attrs(
+            self,
+            target_type=Parameter,
+            on_target=on_parameter,
+            recurse_into=Function,
+        )
 
     @property
     def requires_grad(self) -> bool:
@@ -278,6 +236,12 @@ class Function(ABC):
                 if not partial:
                     raise KeyError(f'Parameter data not found for "{path}"')
                 return  # Skip this parameter
+
+            if not isinstance(init_data, sadl.Parameter):
+                raise TypeError(
+                    'Data in passed parameters must be of type "Parameter", '
+                    f'found "{type(init_data).__name__}" ({init_data})'
+                )
 
             if param.shape != init_data.shape:
                 raise ValueError(
