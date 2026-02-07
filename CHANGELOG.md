@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-02-07)
+
+### Documentation
+
+- **readme**: Added link to demo
+  ([`eff3634`](https://github.com/TimCares/sadl/commit/eff3634a96cddfb3857ce9a263d16c3e368205d7))
+
+### Features
+
+- **optimizer**: Added Adam optimizer
+  ([`f7ad9be`](https://github.com/TimCares/sadl/commit/f7ad9be656f1caa80b27a94071d91040a92bba09))
+
+
 ## v1.1.0 (2026-02-06)
 
 ### Documentation
