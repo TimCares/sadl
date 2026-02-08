@@ -58,6 +58,7 @@ gpu = [
 gpu-cuda11 = [
     "cupy-cuda11x>=13.0.0",
 ]
+build = ["uv ~= 0.9.12"]
 
 [project.urls]
 Homepage = "https://github.com/timcares/sadl"
@@ -162,7 +163,16 @@ show_missing = true
 # =============================================================================
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-build_command = "uv build"
+# The build command for semantic release is more than just the actual
+#   build command "uv build", because the package version in
+#   the "uv.lock" file will become stale.
+#   See: https://python-semantic-release.readthedocs.io/en/latest/configuration/configuration-guides/uv_integration.html#updating-the-uv-lock
+build_command = """
+    python -m pip install -e '.[build]'
+    uv lock --upgrade-package "$PACKAGE_NAME"
+    git add uv.lock
+    uv build
+"""
 commit_parser = "conventional"
 commit_message = "chore(release): v{version}"
 tag_format = "v{version}"

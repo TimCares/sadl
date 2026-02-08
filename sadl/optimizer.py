@@ -59,7 +59,10 @@ def toposort(root: Tensor) -> list[Tensor]:
 
 
 class Optimizer(ABC):
-    """Abstract base class for all optimizers."""
+    """Abstract base class for all optimizers.
+
+    **All optimizer states must be of type `Tensor` or a collection of type `Tensor`**.
+    """
 
     def __init__(self, params: list[Parameter], *, lr: float = 1e-3):
         if len(params) == 0:
@@ -94,10 +97,17 @@ class Optimizer(ABC):
                 If it returns a Tensor, the original is replaced in-place.
                 If it returns None, no replacement occurs.
         """
+
+        def on_tensor_wrapper(path: str, tensor: Tensor) -> Tensor | None:
+            if path.startswith("params"):
+                # exlude param to optimize, see self.get_state for more
+                return None
+            return on_tensor(path, tensor)
+
         traverse_attrs(
             self,
             target_type=Tensor,
-            on_target=on_tensor,
+            on_target=on_tensor_wrapper,
         )
 
     @property
@@ -144,8 +154,10 @@ class Optimizer(ABC):
     def get_state(self, to_device: TensorDevice | None = None) -> OrderedDict[str, Tensor]:
         """The state of the optimizer.
 
-        Note: Only **direct** attributes of the Optimizer class of type **Tensor**
-        will be considered in the state.
+        Note: Only **direct** attributes of the Optimizer class, which must be of type
+        **Tensor** or a collection of type **Tensor** will be considered in the state.
+        The `params` attribute, which stores references to the parameters to optimize
+        are **not** part of the optimizer state, and will be ignored!
 
         Args:
             to_device (TensorDevice | None): If specified, copy each
