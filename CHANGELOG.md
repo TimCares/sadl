@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.2 (2026-02-08)
+
+### Bug Fixes
+
+- **device**: Fixed device handling for cupy
+  ([`b6cb9d6`](https://github.com/TimCares/sadl/commit/b6cb9d657ed0b1c175a922284de5661674d9c876))
+
+
 ## v1.2.1 (2026-02-08)
 
 ### Bug Fixes
