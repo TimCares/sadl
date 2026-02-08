@@ -13,7 +13,11 @@ except PackageNotFoundError:
     __version__ = "0.0.0.dev0"  # Fallback for uninstalled package
 from .backend import (
     BACKEND,
+    DeviceLike,
+    DeviceType,
+    SupportsCupyDevice,
     TensorDevice,
+    normalize_device,
     xp,
 )
 from .disk import (
@@ -53,6 +57,8 @@ __all__ = [
     "BACKEND",
     "SGD",
     "Adam",
+    "DeviceLike",
+    "DeviceType",
     "Function",
     "Linear",
     "LogSoftmax",
@@ -62,6 +68,7 @@ __all__ = [
     "ReLU",
     "Sigmoid",
     "Softmax",
+    "SupportsCupyDevice",
     "Tensor",
     "TensorDevice",
     "__version__",
@@ -71,6 +78,7 @@ __all__ = [
     "load",
     "no_grad",
     "no_grad_fn",
+    "normalize_device",
     "ones_like",
     "save",
     "set_global_grad_mode",

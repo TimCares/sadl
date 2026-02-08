@@ -111,21 +111,18 @@ class Optimizer(ABC):
         )
 
     @property
-    def device(self) -> tuple[TensorDevice] | None:
+    def device(self) -> tuple[TensorDevice, ...]:
         """The devices on which the optimizer state is currently located.
 
         Can be mutliple if the optimizer state is sharded across multiple
         devices.
 
         Returns:
-            tuple[TensorDevice] | None: The devices on which the optimizer
-                state is currently located. None, if the function has
-                no parameters.
+            tuple[TensorDevice, ...]: The devices on which the optimizer
+                state is currently located. Empty, if the optimizer
+                has no parameters.
         """
-        unique_devices = {attr.device for attr in self.state}
-        if len(unique_devices) == 0:
-            return None
-        return tuple(unique_devices)
+        return tuple({attr.device for attr in self.state})
 
     # "no_grad_fn" technically not needed here, as optimizer state Tensors
     # are leaves (not part of a computation graph). We still annotate

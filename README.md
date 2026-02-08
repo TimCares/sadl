@@ -18,15 +18,18 @@ Using [uv](https://docs.astral.sh/uv/) for installation is recommended.
 
 (I had to name the pypi project `py-sadl` instead of `sadl`, because `sadl` was too similar to an existing project.)
 
+Install `uv` with:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
 ```bash
 # Install with uv (recommended)
 uv add py-sadl
 
 # With GPU support (CUDA 12.x)
 uv add py-sadl --extra gpu
-
-# With GPU support (CUDA 11.x)
-uv add py-sadl --extra gpu-cuda11
 ```
 
 Alternatively, using pip:

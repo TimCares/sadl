@@ -120,8 +120,8 @@ def copy_array(array: xp.ndarray, device: TensorDevice) -> xp.ndarray:
             "check cupy and gpu availability."
         )
     # cupy:
-    if isinstance(device, int):
-        with xp.cuda.Device(device):
+    if device.type == "cuda":
+        with xp.cuda.Device(device.device_id):
             return xp.asarray(array)
     else:
         return xp.asnumpy(array)

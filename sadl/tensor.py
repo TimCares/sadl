@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ParamSpec, Self, TypeVar
+from typing import TYPE_CHECKING, Any, ParamSpec, Self, TypeVar, override
 
-from .backend import BACKEND, TensorDevice, xp
+from .backend import BACKEND, TensorDevice, normalize_device, xp
 from .grad_ops import GradOp, get_grad_op, normalize_grad_op_name
 from .utils import copy_array
 
@@ -163,6 +163,11 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
         """
         return len(self.src) == 0
 
+    @property
+    @override
+    def device(self) -> TensorDevice:
+        return normalize_device(getattr(super(), "device", "cpu"))
+
     def copy_to_device(self, device: TensorDevice) -> Tensor:
         """Copy tensor data to `device`.
 
@@ -226,7 +231,7 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
             Tensor: A **copy** of the Tensor on the cpu,
                 if it wasn't on the cpu before.
         """
-        return self.copy_to_device(device="cpu")
+        return self.copy_to_device(device=TensorDevice("cpu"))
 
     def gpu(self, device_id: int = 0) -> Tensor:
         """Move the Tensor to a gpu with `id`.
@@ -242,7 +247,7 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
             Tensor: A **copy** of the Tensor on the specified gpu,
                 if it wasn't on the gpu `device_id` before.
         """
-        return self.copy_to_device(device=device_id)
+        return self.copy_to_device(device=TensorDevice("cuda", device_id=device_id))
 
     def __hash__(self) -> int:
         """Identity-based hash for use in sets/dicts (computation graph tracking)."""
@@ -444,7 +449,7 @@ def tensor(
     data: Any,
     *,
     dtype: Any = None,
-    device: TensorDevice = "cpu",
+    device: TensorDevice | None = None,
     requires_grad: bool = False,
     keep_grad: bool = False,
 ) -> Tensor:
@@ -454,18 +459,21 @@ def tensor(
         data (Any): The array data (can be scalar, list, array, etc).
         dtype (Any): The data type of the array data.
             Defaults to None, meaning dtype is inferred from data.
-        device (TensorDevice): The device on which the Tensor
-            should be created. Defaults to "cpu".
+        device (TensorDevice | None): The device on which the Tensor
+            should be created. Defaults to None, which infers TensorDevice("cpu").
         requires_grad (bool): Whether to track gradients. Defaults to False.
         keep_grad (bool): Whether to retain gradients after backward. Defaults to False.
 
     Returns:
         Tensor: The created Tensor.
     """
-    if BACKEND == "numpy" or device == "cpu":
+    if device is None:
+        device = TensorDevice("cpu")
+
+    if BACKEND == "numpy" or device.type == "cpu":
         arr = xp.array(data, dtype=dtype)
     else:
-        with xp.cuda.Device(device):
+        with xp.cuda.Device(device.device_id):
             arr = xp.array(data, dtype=dtype)
 
     result: Tensor = arr.view(Tensor)

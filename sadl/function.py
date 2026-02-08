@@ -8,13 +8,11 @@ from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, cast
 
 from .backend import TensorDevice, xp
-from .tensor import Parameter, no_grad_fn
+from .tensor import Parameter, Tensor, no_grad_fn
 from .utils import traverse_attrs
 
 if TYPE_CHECKING:
     from collections.abc import Callable, ValuesView
-
-    from . import tensor as sadl
 
 
 logger = logging.getLogger(__name__)
@@ -36,11 +34,11 @@ class Function(ABC):
     """
 
     @abstractmethod
-    def __call__(self, x: sadl.Tensor, **kwargs: Any) -> Any:
+    def __call__(self, x: Tensor, **kwargs: Any) -> Any:
         """Forward pass.
 
         Args:
-            x (sadl.Tensor): Input
+            x (Tensor): Input
             **kwargs (Any): Additional input.
 
         Returns:
@@ -49,7 +47,7 @@ class Function(ABC):
 
     def traverse_parameters(
         self,
-        on_parameter: Callable[[str, sadl.Parameter], sadl.Parameter | None],
+        on_parameter: Callable[[str, Parameter], Parameter | None],
     ) -> None:
         """Recursively traverse all Parameters and optionally transform them.
 
@@ -97,21 +95,18 @@ class Function(ABC):
             param.requires_grad = value
 
     @property
-    def device(self) -> tuple[TensorDevice] | None:
+    def device(self) -> tuple[TensorDevice, ...]:
         """The devices on which the Function is currently located.
 
         Can be mutliple if the function is sharded across multiple
         devices.
 
         Returns:
-            tuple[TensorDevice] | None: The devices on which the function
-                parameters are currently located. None, if the function has
-                no parameters.
+            tuple[TensorDevice, ...]: The devices on which the function
+                parameters are currently located. Empty, if the function
+                has no parameters.
         """
-        unique_devices = {p.device for p in self.parameters}
-        if len(unique_devices) == 0:
-            return None
-        return tuple(unique_devices)
+        return tuple({param.device for param in self.parameters})
 
     # "no_grad_fn" technically not needed here, as Parameter.copy_to_device
     # is a utility operation (not tracked in the computation graph).
@@ -129,7 +124,7 @@ class Function(ABC):
             Function: self, for method chaining.
         """
 
-        def copy_param(_path: str, param: sadl.Parameter) -> sadl.Parameter:
+        def copy_param(_path: str, param: Parameter) -> Parameter:
             return param.copy_to_device(device)
 
         self.traverse_parameters(copy_param)
@@ -175,7 +170,7 @@ class Function(ABC):
     def get_parameters(
         self,
         to_device: TensorDevice | None = None,
-    ) -> OrderedDict[str, sadl.Parameter]:
+    ) -> OrderedDict[str, Parameter]:
         """Recursively collect all Parameters from this Function and nested children.
 
         Args:
@@ -183,23 +178,23 @@ class Function(ABC):
                 Parameter to this device in the returned dict. Defaults to None.
 
         Returns:
-            OrderedDict[str, sadl.Parameter]: Parameters keyed by their path,
+            OrderedDict[str, Parameter]: Parameters keyed by their path,
                 e.g. "layers[0].W", "layers[1].b", "payload{key}.W".
         """
-        result: OrderedDict[str, sadl.Parameter] = OrderedDict()
+        result: OrderedDict[str, Parameter] = OrderedDict()
 
-        def collect_param(path: str, param: sadl.Parameter) -> None:
+        def collect_param(path: str, param: Parameter) -> None:
             result[path] = param.copy_to_device(to_device) if to_device is not None else param
 
         self.traverse_parameters(collect_param)
         return result
 
     @property
-    def parameters(self) -> ValuesView[sadl.Parameter]:
+    def parameters(self) -> ValuesView[Parameter]:
         """The parameters of the function.
 
         Returns:
-            ValuesView[sadl.Parameter]: A view over the
+            ValuesView[Parameter]: A view over the
                 function parameters.
         """
         return self.get_parameters().values()
@@ -211,14 +206,14 @@ class Function(ABC):
     def load_parameters(
         self,
         *,
-        parameters: OrderedDict[str, sadl.Parameter],
+        parameters: OrderedDict[str, Parameter],
         match_function_device: bool = False,
         partial: bool = False,
     ) -> Function:
         """Load parameters into this Function from a parameter dict.
 
         Args:
-            parameters (OrderedDict[str, sadl.Parameter]): Parameters keyed by path,
+            parameters (OrderedDict[str, Parameter]): Parameters keyed by path,
                 as returned by `get_parameters`.
             match_function_device (bool): If True, copy each loaded
                 parameter to the target parameter's device before assignment.
@@ -230,14 +225,14 @@ class Function(ABC):
             Function: self, for method chaining.
         """
 
-        def load_param(path: str, param: sadl.Parameter) -> None:
+        def load_param(path: str, param: Parameter) -> None:
             init_data = parameters.get(path)
             if init_data is None:
                 if not partial:
                     raise KeyError(f'Parameter data not found for "{path}"')
                 return  # Skip this parameter
 
-            if not isinstance(init_data, sadl.Parameter):
+            if not isinstance(init_data, Parameter):
                 raise TypeError(
                     'Data in passed parameters must be of type "Parameter", '
                     f'found "{type(init_data).__name__}" ({init_data})'
@@ -269,33 +264,33 @@ class Function(ABC):
 class Sigmoid(Function):
     """Sigmoid activation function."""
 
-    def __call__(self, x: sadl.Tensor) -> sadl.Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
         """Forward pass, computes the sigmoid activation function.
 
         Args:
-            x (sadl.Tensor): Input
+            x (Tensor): Input
 
         Returns:
-            sadl.Tensor: Transformed output
+            Tensor: Transformed output
         """
-        return cast("sadl.Tensor", 1 / (xp.exp(-x) + 1))
+        return cast(Tensor, 1 / (xp.exp(-x) + 1))
 
 
 class Softmax(Function):
     """Softmax activation function."""
 
-    def __call__(self, x: sadl.Tensor) -> sadl.Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
         """Forward pass, computes the softmax activation function.
 
         Args:
-            x (sadl.Tensor): Input
+            x (Tensor): Input
 
         Returns:
-            sadl.Tensor: Transformed output
+            Tensor: Transformed output
         """
         x = x - x.max(axis=-1, keepdims=True)  # for numerical stability
         x = xp.exp(x)
-        return cast("sadl.Tensor", x / x.sum(axis=-1, keepdims=True))
+        return cast(Tensor, x / x.sum(axis=-1, keepdims=True))
 
 
 class LogSoftmax(Function):
@@ -304,14 +299,14 @@ class LogSoftmax(Function):
     Mathematically: `log(softmax(x))`.
     """
 
-    def __call__(self, x: sadl.Tensor) -> sadl.Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
         """Forward pass, computes softmax followed by the logarithm.
 
         Args:
-            x (sadl.Tensor): Input
+            x (Tensor): Input
 
         Returns:
-            sadl.Tensor: Transformed output
+            Tensor: Transformed output
         """
         x = x - x.max(axis=-1, keepdims=True)
         x = x - xp.log(xp.sum(xp.exp(x), axis=-1, keepdims=True))
@@ -321,16 +316,16 @@ class LogSoftmax(Function):
 class ReLU(Function):
     """ReLU activation function."""
 
-    def __call__(self, x: sadl.Tensor) -> sadl.Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
         """Forward pass, computes the ReLU activation function.
 
         Args:
-            x (sadl.Tensor): Input
+            x (Tensor): Input
 
         Returns:
-            sadl.Tensor: Transformed output
+            Tensor: Transformed output
         """
-        return cast("sadl.Tensor", xp.maximum(xp.array([0]), x))
+        return cast(Tensor, xp.maximum(xp.array([0]), x))
 
 
 class Linear(Function):
@@ -360,14 +355,14 @@ class Linear(Function):
         self.b = Parameter(xp.zeros((self.dim_out,), dtype=dtype)) if bias else None
         self.INPUT_N_DIM = 2
 
-    def __call__(self, x: sadl.Tensor) -> sadl.Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
         """Forward pass.
 
         Args:
-            x (sadl.Tensor): Input
+            x (Tensor): Input
 
         Returns:
-            sadl.Tensor: Transformed output
+            Tensor: Transformed output
         """
         assert x.ndim == self.INPUT_N_DIM, (
             "Input must have two dimensions, dim[0] -> sample dim, dim[1] -> feature dim"
@@ -386,17 +381,17 @@ class Mlp(Function):
     def __init__(self, layers: list[Function]) -> None:
         self.layers = layers
 
-    def __call__(self, x: sadl.Tensor) -> sadl.Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
         """Forward pass.
 
         Calls all layers subsequently in the order
         as provided in the constructor.
 
         Args:
-            x (sadl.Tensor): Input
+            x (Tensor): Input
 
         Returns:
-            sadl.Tensor: Transformed output
+            Tensor: Transformed output
         """
         for layer in self.layers:
             x = layer(x)

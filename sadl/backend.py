@@ -1,16 +1,10 @@
+from __future__ import annotations
+
 import logging
-from typing import TYPE_CHECKING, Any, Literal
+from dataclasses import dataclass
+from typing import Literal, Protocol, TypeAlias, runtime_checkable
 
 logger = logging.getLogger(__name__)
-
-
-TensorDevice = Literal["cpu"] | int
-
-
-if TYPE_CHECKING:
-    import numpy
-
-    ModuleType = numpy.ndarray[Any, Any] | Any  # numpy or cupy module
 
 
 def _validate_cupy_available() -> None:
@@ -35,11 +29,67 @@ try:
 
     BACKEND = "cupy"
     logger.debug("Using cupy as backend")
-except (ImportError, RuntimeError):
+except (ImportError, RuntimeError) as err:
     import numpy as xp
 
     BACKEND = "numpy"
     logger.warning("Cupy backend unavailable; falling back to numpy (cpu)")
+    logger.debug(f"Falling back to numpy because: {err!r}")
 
 
-__all__ = ["BACKEND", "TensorDevice", "xp"]
+DeviceType = Literal["cpu", "cuda"]
+
+
+@dataclass(frozen=True)
+class TensorDevice:
+    """The global device identifier for sadl Tensors."""
+
+    type: DeviceType
+    device_id: int = 0
+
+
+@runtime_checkable
+class SupportsCupyDevice(Protocol):
+    """Cupy protocol to access cuda device `id`."""
+
+    id: int  # cupy.cuda.Device exposes attribute "id"
+
+
+DeviceLike: TypeAlias = TensorDevice | Literal["cpu"] | int | SupportsCupyDevice
+
+
+def normalize_device(device: DeviceLike) -> TensorDevice:
+    """Transforms any device-like type into a sadl TensorDevice type.
+
+    Args:
+        device (DeviceLike): The device candidate.
+
+    Raises:
+        TypeError: If `device` denotes an unsupported device.
+            Should not happen.
+
+    Returns:
+        TensorDevice: The sadl TensorDevice.
+    """
+    if isinstance(device, TensorDevice):
+        return device
+    if device == "cpu":
+        return TensorDevice("cpu")
+    if isinstance(device, int):
+        return TensorDevice("cuda", device)
+
+    if hasattr(device, "id"):
+        return TensorDevice("cuda", int(device.id))
+
+    raise TypeError(f"Unsupported device spec: {device!r}")
+
+
+__all__ = [
+    "BACKEND",
+    "DeviceLike",
+    "DeviceType",
+    "SupportsCupyDevice",
+    "TensorDevice",
+    "normalize_device",
+    "xp",
+]
