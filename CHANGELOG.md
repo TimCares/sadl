@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.1 (2026-02-08)
+
+### Bug Fixes
+
+- **optimizer**: Removed params attribute from optimizer state
+  ([`34f4a16`](https://github.com/TimCares/sadl/commit/34f4a164809e22c6a25ad110de35b1d00ea7a6fe))
+
+
 ## v1.2.0 (2026-02-07)
 
 ### Documentation

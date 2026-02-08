@@ -1,6 +1,6 @@
 [project]
 name = "py-sadl"
-version = "1.2.0"
+version = "1.2.1"
 description = "Simple Autograd Deep Learning: A minimal, readable deep learning framework built on NumPy"
 readme = "README.md"
 requires-python = ">=3.13"
