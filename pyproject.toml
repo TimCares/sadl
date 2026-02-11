@@ -105,6 +105,9 @@ ignore = [
     "PLR0912", # Too many branches (parameter traversal)
 ]
 
+[tool.ruff.lint.pylint]
+max-args = 10
+
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 

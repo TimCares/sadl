@@ -108,7 +108,7 @@ def no_grad_fn(fn: Callable[P, T]) -> Callable[P, T]:
 class Tensor(xp.ndarray):  # type: ignore[misc]
     """A tensor wrapper around arrays with autograd support."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(
         self,
         data: Any = None,  # noqa: ARG002 -> Ignored, handled by __new__, needed for signature
         *,

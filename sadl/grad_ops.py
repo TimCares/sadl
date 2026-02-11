@@ -85,7 +85,7 @@ class GradOpSpec:
 _GRAD_OPS_REGISTRY: dict[str, GradOpSpec] = {}
 
 
-def register_grad_op(  # noqa: PLR0913
+def register_grad_op(
     *,
     op_type: OpType,
     op_inputs: OpInputs,
@@ -1104,6 +1104,37 @@ def copy_to_device_backward(
     # Just pass through grad_out by reverting the "copy_to_device" op
     # That means copying grad_out back to the device of x
     x_grad = copy_array(array=grad_out, device=x.device) if compute_grad[0] else None
+    return (x_grad,)
+
+
+@register_grad_op(
+    op_type=OpType.MOVEMENT,
+    op_inputs=OpInputs.UNARY,
+    skip_test=True,
+    skip_reason="not testable with finite differences",
+)
+def reshape_backward(
+    *inputs: Tensor,
+    compute_grad: tuple[bool],
+    grad_out: xp.ndarray,
+) -> tuple[xp.ndarray | None]:
+    """Computes gradients for the `reshape` operation on a Tensor.
+
+    Args:
+        *inputs (Tensor): The input Tensor, should only be one, as
+            reshape only operates on a single Tensor.
+        compute_grad (tuple[bool]): Flags indicating which input gradients
+            to compute, aligned with `inputs`.
+        grad_out (xp.ndarray): Upstream gradient.
+
+    Returns:
+        tuple[xp.ndarray | None]: Gradients for the Tensor, with
+            `None` where `compute_grad[i]` is False.
+    """
+    x = inputs[0]
+
+    # we just reshape backward:
+    x_grad = xp.reshape(grad_out, shape=x.shape) if compute_grad[0] else None
     return (x_grad,)
 
 

@@ -288,7 +288,6 @@ See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for behavior guidelines. The file w
 
 - Static graph compilation for repeated computations
 - Additional layers and components (convolution, batch normalization, attention)
-- More optimizers (Adam, AdamW, RMSprop)
 - XLA compilation backend for TPU support
 - Automatic mixed precision training
 - Distributed training primitives

@@ -1,8 +1,8 @@
 # SADL Makefile
 
 .PHONY: help install install-dev sync lint format typecheck ci-lint test \
-        test-install test-all check clean pre-commit run build publish publish-test \
-        bump bump-patch bump-minor bump-major changelog version commit
+        test-install test-all check clean-cache clean-all pre-commit run build publish publish-test \
+        version commit
 
 .DEFAULT_GOAL := help
 
@@ -97,7 +97,7 @@ ci: format-check lint typecheck ## Run CI checks (stricter)
 # Build & Publish
 # =============================================================================
 
-build: check clean ## Build package (runs checks first)
+build: check clean-cache ## Build package (runs checks first)
 	uv build
 	@echo "$(GREEN) Package built successfully!$(RESET)"
 	@echo "$(BLUE)Distribution files in dist/$(RESET)"
@@ -125,21 +125,21 @@ commit: ## Create a conventional commit
 version: ## Show current version
 	@uv run cz version --project
 
-bump-dry:
-	@uv run semantic-release -v --noop version
-
 # =============================================================================
 # Cleanup
 # =============================================================================
 
-clean: ## Remove everything
-	rm -rf .venv
+clean-cache: ## Remove caches
 	rm -rf .pytest_cache
 	rm -rf .mypy_cache
 	rm -rf .ruff_cache
-	rm -rf dist
-	rm -rf build
 	rm -rf *.egg-info
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true
 	@echo "$(GREEN) Cleaned!$(RESET)"
+
+clean-all: clean ## Remove everything
+	rm -rf .venv
+	rm -rf dist
+	rm -rf build
+	@echo "$(GREEN) Cleaned all!$(RESET)"

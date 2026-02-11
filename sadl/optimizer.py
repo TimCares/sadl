@@ -373,6 +373,52 @@ class Optimizer(ABC):
 class SGD(Optimizer):
     """Stochastic gradient descent optimizer."""
 
+    def __init__(
+        self,
+        params: list[Parameter],
+        *,
+        lr: float = 1e-3,
+        friction: float = 1,
+        weight_decay: float = 0,
+    ):
+        """The stochastic gradient descent optimizer.
+
+        Note: By default, vanilla SGD is used. However, when setting
+        the arguments accordingly, it can become SGD with momentum and also
+        apply weight decay.
+
+        **Standard SGD:** `friction=1, weight_decay=0`
+        **SGD w/ momentum:** `friction<1, weight_decay=0`
+        **SGDW:** `friction<1, weight_decay>0`
+
+        Args:
+            params (list[Parameter]): Parameters to optimize.
+            lr (float, optional): The learing rate. Defaults to 1e-3.
+            friction (float, optional): How much friction to apply on the
+                momentum. If friction is 1 (100%), then we do not use momentum,
+                as in every step all previous momentum is lost.
+                If momentum is desired, set `friction<1`. A typical value is `0.1`,
+                so 10% of momentum is lost every step due to friction.
+                Defaults to 1.
+            weight_decay (float, optional): Decay rate of the weights/parameters,
+                equals the weight of L2-regularization on the loss.
+                If SGDW is used, a typical value is `0.01`.
+                Defaults to `0`.
+        """
+        super().__init__(params=params, lr=lr)
+
+        if not 0 <= friction <= 1:
+            raise ValueError(f"friction must be in [0, 1], got {friction}")
+
+        self.m: list[Tensor] | None = (
+            [zeros_like(p, dtype=p.dtype, requires_grad=False) for p in self.params]
+            if friction < 1
+            else None
+        )
+
+        self.friction = tensor(friction)
+        self.weight_decay = tensor(weight_decay)
+
     @no_grad_fn
     def step(self) -> None:
         """Performs a single gradient descent step.
@@ -380,10 +426,23 @@ class SGD(Optimizer):
         Raises:
             ValueError: If a parameter has no gradient.
         """
-        for param in self.params:
+        for idx, param in enumerate(self.params):
             if param.grad is None:
                 raise ValueError("Gradient of parameter must not be None in step function")
-            param -= self.lr * param.grad  # noqa: PLW2901
+
+            if self.m is not None:
+                # we lose momentum through "friction", the momentum remaining from the previous step
+                # is (1-self.friction)
+                # we add param.grad as new force from the current position
+                self.m[idx] = (1 - self.friction) * self.m[idx] + param.grad
+                grad = self.m[idx]
+            else:
+                grad = param.grad
+
+            param[...] = (
+                (1 - self.lr * self.weight_decay) * param  # weight decay part
+                - self.lr * grad  # gradient part
+            )
 
 
 class Adam(Optimizer):
@@ -397,12 +456,15 @@ class Adam(Optimizer):
         beta_1: float = 0.9,
         beta_2: float = 0.999,
         epsilon: float = 1e-8,
+        weight_decay: float = 0,
     ):
         """The Adam optimizer.
 
+        Note: By setting `weight_decay` > 0 this becomes `AdamW`.
+
         Args:
             params (list[Parameter]): Parameters to optimize.
-            lr (float, optional): The learing rate, also called `alpha`
+            lr (float, optional): The learning rate, also called `alpha`
                 in the paper. Defaults to 1e-3.
             beta_1 (float, optional): Exponential decay rate for
                 the momentum. Defaults to 0.9.
@@ -410,6 +472,11 @@ class Adam(Optimizer):
                 the noise. Defaults to 0.999.
             epsilon (float, optional): Value added to `v` to improve
                 numerical stability and avoid division by zero. Defaults to 1e-8.
+            weight_decay (float, optional): Decay rate of the weights/parameters,
+                equals the weight of L2-regularization on the loss.
+                If greater than `0`, the optimizer becomes **AdamW**.
+                If AdamW is used, a typical value is `0.01`.
+                Defaults to `0`, meaning vanilla Adam is used.
         """
         super().__init__(params=params, lr=lr)
         self.m: list[Tensor] = [
@@ -422,6 +489,7 @@ class Adam(Optimizer):
         self.beta_2 = tensor(beta_2)
         self.epsilon = tensor(epsilon)
         self.t = tensor(0)
+        self.weight_decay = tensor(weight_decay)
 
     @no_grad_fn
     def step(self) -> None:
@@ -444,7 +512,13 @@ class Adam(Optimizer):
 
             lr_t = self.lr * xp.sqrt(1 - self.beta_2**self.t) / (1 - self.beta_1**self.t)
 
-            param -= lr_t * self.m[idx] / (xp.sqrt(self.v[idx]) + self.epsilon)  # noqa: PLW2901
+            epsilon_hat = self.epsilon * xp.sqrt(1 - self.beta_2**self.t)
+
+            # [...] -> in-place assignment
+            param[...] = (
+                (1 - self.lr * self.weight_decay) * param  # weight decay part
+                - lr_t * self.m[idx] / (xp.sqrt(self.v[idx]) + epsilon_hat)  # gradient part
+            )
 
 
 __all__ = [
