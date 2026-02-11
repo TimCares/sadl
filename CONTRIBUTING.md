@@ -5,6 +5,14 @@ Yes, I know the code quality checks can be annoying and might be overly strict, 
 
 ## Setup
 
+This project uses [uv](https://docs.astral.sh/uv/).
+
+If not yet installed, install `uv` with:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
 ```bash
 # Clone the repository
 git clone https://github.com/timcares/sadl.git
