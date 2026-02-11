@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.3.0 (2026-02-11)
+
+### Features
+
+- **optimizer**: Added AdamW, SGD w/ momentum, and SGDW
+  ([`a8dde89`](https://github.com/TimCares/sadl/commit/a8dde89641313296577ce8df7d4641de914397f1))
+
+
 ## v1.2.2 (2026-02-08)
 
 ### Bug Fixes
