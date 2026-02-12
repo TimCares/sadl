@@ -2,12 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from .backend import BACKEND, TensorDevice, xp
-
-if TYPE_CHECKING:
-    pass
 
 
 def copy_array(array: xp.ndarray, device: TensorDevice) -> xp.ndarray:
