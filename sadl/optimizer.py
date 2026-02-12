@@ -4,11 +4,9 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable, ValuesView
 from itertools import chain
 
-from sadl.ops import zeros_like
-
-from .backend import TensorDevice, xp
-from .tensor import Parameter, Tensor, no_grad, no_grad_fn, tensor
-from .utils import traverse_attrs
+from .backend import TensorDevice, no_grad, no_grad_fn, xp
+from .tensor import Parameter, Tensor, tensor
+from .utils import traverse_attrs, zeros_like
 
 logger = logging.getLogger(__name__)
 

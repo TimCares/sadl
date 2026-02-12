@@ -7,8 +7,8 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any, cast
 
-from .backend import TensorDevice, xp
-from .tensor import Parameter, Tensor, no_grad_fn
+from .backend import TensorDevice, no_grad_fn, xp
+from .tensor import Parameter, Tensor
 from .utils import traverse_attrs
 
 if TYPE_CHECKING:

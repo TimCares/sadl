@@ -18,7 +18,7 @@ from typing import Any, cast
 import numpy as np
 import pytest
 from sadl import Tensor, set_global_grad_mode, tensor, xp
-from sadl.grad_ops import (
+from sadl.backend.grad_ops import (
     _GRAD_OPS_REGISTRY,
     GradOpSpec,
     OpInputs,

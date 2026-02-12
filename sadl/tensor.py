@@ -3,18 +3,15 @@
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING, Any, ParamSpec, Self, TypeVar, override
+from typing import TYPE_CHECKING, Any, Self, override
 
 from .backend import BACKEND, TensorDevice, normalize_device, xp
-from .grad_ops import GradOp, get_grad_op, normalize_grad_op_name
-from .utils import copy_array
+from .backend.grad_mode import is_global_grad_mode_enabled
+from .backend.grad_ops import GradOp, get_grad_op, normalize_grad_op_name
+from .backend.ops import copy_array
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterable, Mapping
-    from types import TracebackType
-
-P = ParamSpec("P")
-T = TypeVar("T")
+    from collections.abc import Iterable, Mapping
 
 
 logger = logging.getLogger(__name__)
@@ -35,74 +32,6 @@ def _to_tensor(x: Any) -> Tensor:
     if isinstance(x, Tensor):
         return x
     return Tensor(x, requires_grad=False)
-
-
-_GRAD_MODE_ENABLED: bool = True
-
-
-class no_grad:  # noqa: N801
-    """Context manager to disable gradient tracking in the context."""
-
-    def __enter__(self) -> Self:
-        global _GRAD_MODE_ENABLED
-        self.prev = _GRAD_MODE_ENABLED
-        _GRAD_MODE_ENABLED = False
-        return self
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        global _GRAD_MODE_ENABLED
-        _GRAD_MODE_ENABLED = self.prev
-
-
-def set_global_grad_mode(enabled: bool) -> None:
-    """Sets the global grad mode to `enabled`.
-
-    Args:
-        enabled (bool): Whether to enable or disable
-            gradient tracking.
-    """
-    global _GRAD_MODE_ENABLED
-    _GRAD_MODE_ENABLED = enabled
-    logger.debug(f"Gradient tracking {'enabled' if enabled else 'disabled'}")
-
-
-def get_current_global_grad_mode() -> bool:
-    """Gets the current global grad mode.
-
-    Returns:
-        bool: Whether gradient tracking is
-            enabled or disabled.
-    """
-    return _GRAD_MODE_ENABLED
-
-
-def no_grad_fn(fn: Callable[P, T]) -> Callable[P, T]:
-    """Disables gradient tracking for all ops in the annotated function.
-
-    This decorator preserves the original function's type signature.
-
-    Args:
-        fn (Callable[P, T]): The function in which to disable gradient tracking.
-
-    Returns:
-        The wrapped function with the same signature as the input.
-
-    Example:
-        >>> @no_grad_fn
-        ... def inference(x: Tensor) -> Tensor:
-        ...     return x * 2
-    """
-
-    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
-        with no_grad():
-            return fn(*args, **kwargs)
-
-    return wrapper
 
 
 class Tensor(xp.ndarray):  # type: ignore[misc]
@@ -128,7 +57,7 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
         self.backward_fn: GradOp | None = backward_fn
         self.op_ctx: dict[str, Any] = op_ctx or {}
 
-        self.requires_grad = _GRAD_MODE_ENABLED and requires_grad
+        self.requires_grad = is_global_grad_mode_enabled() and requires_grad
 
         self.grad: xp.array | None = None
 
@@ -185,7 +114,36 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
         Returns:
             Tensor: A tensor with the same data, now on `device`.
         """
-        return _copy_to_device(tensor=self, device=device)
+        if self.device == device:
+            return self
+
+        new_device_array = copy_array(array=self, device=device)
+
+        # Check if this is a non-leaf tensor in an active computation graph
+        # (like intermediate activations in multi-GPU scenarios)
+        src_requires_grad = [s.requires_grad for s in self.src]
+        is_in_graph = (
+            is_global_grad_mode_enabled()
+            and self.requires_grad
+            and len(self.src) > 0
+            and any(src_requires_grad)
+        )
+
+        # __array_finalize__ sets defaults from new_device_array (plain xp.ndarray),
+        # so we manually set attributes
+        result: Tensor = new_device_array.view(Tensor)
+
+        if is_in_graph:
+            # Tracked operation: gradients flow back through device transfer
+            result.src = (self,)
+            result.backward_fn = get_grad_op("copy_to_device")
+            result.requires_grad = True
+        else:
+            # Utility operation for leaf tensors
+            result.requires_grad = self.requires_grad
+
+        result.keep_grad = self.keep_grad
+        return result
 
     def detach(
         self,
@@ -298,7 +256,7 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
             result = func(*xp_input_arrays, **kwargs)
 
         # Skip graph building when grad mode is disabled (e.g., during backward pass)
-        if not _GRAD_MODE_ENABLED:
+        if not is_global_grad_mode_enabled():
             return Tensor(result, requires_grad=False)
 
         src = tuple(_to_tensor(i) for i in inputs)
@@ -351,7 +309,7 @@ class Tensor(xp.ndarray):  # type: ignore[misc]
             result = func(*xp_input_arrays, **kwargs)
 
         # Skip graph building when grad mode is disabled (e.g., during backward pass)
-        if not _GRAD_MODE_ENABLED:
+        if not is_global_grad_mode_enabled():
             return Tensor(result, requires_grad=False)
 
         src = tuple(_to_tensor(a) for a in args)
@@ -478,68 +436,13 @@ def tensor(
 
     result: Tensor = arr.view(Tensor)
     # __array_finalize__ sets defaults; override with user values
-    result.requires_grad = _GRAD_MODE_ENABLED and requires_grad
+    result.requires_grad = is_global_grad_mode_enabled() and requires_grad
     result.keep_grad = keep_grad
-    return result
-
-
-def _copy_to_device(tensor: Tensor, device: TensorDevice) -> Tensor:
-    """Copy tensor data to `device`.
-
-    For intermediate tensors in a computation graph (non-leaf with sources
-    that require grad), this is a tracked operation so gradients flow back.
-    For leaf tensors, this is a utility operation.
-
-    Note: If the Tensor already is on `device`, no copy is created. Instead,
-    the Tensor is returned as is.
-
-    Args:
-        tensor (Tensor): The tensor to copy to `device`.
-        device (TensorDevice): The device to copy to. Should either
-            be `cpu` or an integer specifying the GPU id.
-
-    Returns:
-        Tensor: A tensor with the same data, now on `device`.
-    """
-    if tensor.device == device:
-        return tensor
-
-    new_device_array = copy_array(array=tensor, device=device)
-
-    # Check if this is a non-leaf tensor in an active computation graph
-    # (like intermediate activations in multi-GPU scenarios)
-    src_requires_grad = [s.requires_grad for s in tensor.src]
-    is_in_graph = (
-        _GRAD_MODE_ENABLED
-        and tensor.requires_grad
-        and len(tensor.src) > 0
-        and any(src_requires_grad)
-    )
-
-    # __array_finalize__ sets defaults from new_device_array (plain xp.ndarray),
-    # so we manually set attributes
-    result: Tensor = new_device_array.view(Tensor)
-
-    if is_in_graph:
-        # Tracked operation: gradients flow back through device transfer
-        result.src = (tensor,)
-        result.backward_fn = get_grad_op("copy_to_device")
-        result.requires_grad = True
-    else:
-        # Utility operation for leaf tensors
-        result.requires_grad = tensor.requires_grad
-
-    result.keep_grad = tensor.keep_grad
     return result
 
 
 __all__ = [
     "Parameter",
     "Tensor",
-    "_copy_to_device",
-    "get_current_global_grad_mode",
-    "no_grad",
-    "no_grad_fn",
-    "set_global_grad_mode",
     "tensor",
 ]

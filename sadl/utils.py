@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from .backend import BACKEND, TensorDevice, xp
+from .backend import is_global_grad_mode_enabled, xp
+from .tensor import Tensor
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -95,33 +96,47 @@ def traverse_attrs(
         _handle(root, attr_name, attr_value, attr_name)
 
 
-def copy_array(array: xp.ndarray, device: TensorDevice) -> xp.ndarray:
-    """Copy an array to the specified device.
+def ones_like(
+    other: Tensor,
+    *,
+    dtype: Any = None,
+    requires_grad: bool = False,
+) -> Tensor:
+    """Create a Tensor of ones with the same shape and device as `other`.
 
     Args:
-        array (xp.ndarray): The array to copy.
-        device (TensorDevice): Target device, "cpu" or GPU id (int).
-
-    Raises:
-        ValueError: If device string is not "cpu".
-        ValueError: If using numpy backend and requesting a GPU device.
+        other (Tensor): The tensor to match shape and device from.
+        dtype (Any): Override dtype. Defaults to None (use other's dtype).
+        requires_grad (bool): Whether to track gradients. Defaults to False.
 
     Returns:
-        xp.ndarray: The array on the target device, or the original if already there.
+        Tensor: A tensor of ones.
     """
-    if array.device == device:
-        return array
-    if isinstance(device, str) and device != "cpu":
-        raise ValueError('Only "cpu" allowed as string device.')
-    if BACKEND == "numpy":
-        raise ValueError(
-            "Copying to another device is only possible when using cupy "
-            "as the backend. Currently, numpy is the backend. Please "
-            "check cupy and gpu availability."
-        )
-    # cupy:
-    if device.type == "cuda":
-        with xp.cuda.Device(device.device_id):
-            return xp.asarray(array)
-    else:
-        return xp.asnumpy(array)
+    # Use xp.ones(shape) instead of xp.ones_like(tensor) to avoid
+    # triggering __array_function__ on the Tensor
+    result: Tensor = xp.ones(other.shape, dtype=dtype or other.dtype).view(Tensor)
+    result.requires_grad = is_global_grad_mode_enabled() and requires_grad
+    return result
+
+
+def zeros_like(
+    other: Tensor,
+    *,
+    dtype: Any = None,
+    requires_grad: bool = False,
+) -> Tensor:
+    """Create a Tensor of zeros with the same shape and device as `other`.
+
+    Args:
+        other (Tensor): The tensor to match shape and device from.
+        dtype (Any): Override dtype. Defaults to None (use other's dtype).
+        requires_grad (bool): Whether to track gradients. Defaults to False.
+
+    Returns:
+        Tensor: A tensor of zeros.
+    """
+    # Use xp.zeros(shape) instead of xp.zeros_like(tensor) to avoid
+    # triggering __array_function__ on the Tensor
+    result: Tensor = xp.zeros(other.shape, dtype=dtype or other.dtype).view(Tensor)
+    result.requires_grad = is_global_grad_mode_enabled() and requires_grad
+    return result

@@ -5,8 +5,6 @@ A minimal, readable deep learning framework built on NumPy/CuPy.
 
 from importlib.metadata import PackageNotFoundError, version
 
-from . import grad_ops
-
 try:
     __version__ = version("py-sadl")
 except PackageNotFoundError:
@@ -17,7 +15,13 @@ from .backend import (
     DeviceType,
     SupportsCupyDevice,
     TensorDevice,
+    copy_array,
+    grad_ops,
+    is_global_grad_mode_enabled,
+    no_grad,
+    no_grad_fn,
     normalize_device,
+    set_global_grad_mode,
     xp,
 )
 from .disk import (
@@ -33,11 +37,6 @@ from .function import (
     Sigmoid,
     Softmax,
 )
-from .ops import (
-    copy_to_device,
-    ones_like,
-    zeros_like,
-)
 from .optimizer import (
     SGD,
     Adam,
@@ -46,11 +45,11 @@ from .optimizer import (
 from .tensor import (
     Parameter,
     Tensor,
-    get_current_global_grad_mode,
-    no_grad,
-    no_grad_fn,
-    set_global_grad_mode,
     tensor,
+)
+from .utils import (
+    ones_like,
+    zeros_like,
 )
 
 __all__ = [
@@ -72,9 +71,9 @@ __all__ = [
     "Tensor",
     "TensorDevice",
     "__version__",
-    "copy_to_device",
-    "get_current_global_grad_mode",
+    "copy_array",
     "grad_ops",
+    "is_global_grad_mode_enabled",
     "load",
     "no_grad",
     "no_grad_fn",

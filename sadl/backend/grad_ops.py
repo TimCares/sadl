@@ -13,10 +13,10 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, Literal
 
 from .backend import xp
-from .utils import copy_array
+from .ops import copy_array
 
 if TYPE_CHECKING:
-    from .tensor import Tensor
+    from ..tensor import Tensor
 
 
 # Type alias for gradient operations (returns plain arrays, not Tensors)
