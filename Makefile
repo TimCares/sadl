@@ -31,7 +31,7 @@ install: ## Install production dependencies
 	uv sync
 
 install-dev: ## Install all dependencies including dev tools
-	uv sync --extra dev
+	uv sync --dev
 
 sync: install-dev ## Alias for install-dev
 
