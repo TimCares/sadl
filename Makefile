@@ -51,17 +51,17 @@ format: ## Format code (ruff)
 format-check: ## Check code formatting without changes
 	uv run ruff format --check .
 
+docstring-check: ## Check docstring coverage
+	uv run interrogate
+
 lint: ## Run linter (ruff)
 	uv run ruff check .
 
 lint-fix: ## Run linter and auto-fix issues
 	uv run ruff check --fix .
 
-typecheck: ## Run type checker (mypy)
-	uv run mypy .
-
-ci-lint: format-check lint typecheck ## Run all static checks (CI)
-	@echo "$(GREEN) All static checks passed!$(RESET)"
+typecheck: ## Run type checker (pyright)
+	uv run pyright
 
 # =============================================================================
 # Testing
@@ -87,11 +87,11 @@ test-all: test test-install ## Run all tests including installation test
 # All-in-One Commands
 # =============================================================================
 
-check: format lint typecheck test-all ## Run all checks (format, lint, typecheck, test, test install)
-	@echo "$(GREEN) All checks passed!$(RESET)"
+ci-check: format-check docstring-check lint typecheck ## Run all static checks (CI)
+	@echo "$(GREEN) All static checks passed!$(RESET)"
 
-ci: format-check lint typecheck ## Run CI checks (stricter)
-	@echo "$(GREEN) CI checks passed!$(RESET)"
+check: format docstring-check lint typecheck test-all ## Run all checks (format, docstring, lint, typecheck, test, test install)
+	@echo "$(GREEN) All checks passed!$(RESET)"
 
 # =============================================================================
 # Build & Publish
@@ -131,7 +131,6 @@ version: ## Show current version
 
 clean-cache: ## Remove caches
 	rm -rf .pytest_cache
-	rm -rf .mypy_cache
 	rm -rf .ruff_cache
 	rm -rf *.egg-info
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

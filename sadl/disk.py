@@ -11,7 +11,10 @@ import numpy as np
 from .tensor import Tensor, tensor
 
 _SADL_MAGIC = b"SADL"
-_SADL_VERSION = 1
+
+# different from semantic version, only bump when the code
+# of this file changes without backward compat:
+_SADL_SERIALIZE_VERSION = 1
 
 
 def _dtype_to_str(dtype: Any) -> str:
@@ -52,7 +55,7 @@ def save(data: Tensor | OrderedDict[str, Tensor], file_path: str) -> None:
     with open(file_path, "wb") as f:
         # Write header
         f.write(_SADL_MAGIC)
-        f.write(struct.pack("<B", _SADL_VERSION))  # uint8 version
+        f.write(struct.pack("<B", _SADL_SERIALIZE_VERSION))  # uint8 version
         f.write(struct.pack("<I", len(tensors)))  # uint32 num tensors
 
         # Write each tensor
@@ -107,8 +110,8 @@ def load(file_path: str) -> Tensor | OrderedDict[str, Tensor]:
             raise ValueError(f"Invalid file format. Expected SADL magic bytes, got {magic!r}")
 
         version = struct.unpack("<B", f.read(1))[0]
-        if version != _SADL_VERSION:
-            raise ValueError(f"Unsupported version {version}. Expected {_SADL_VERSION}")
+        if version != _SADL_SERIALIZE_VERSION:
+            raise ValueError(f"Unsupported version {version}. Expected {_SADL_SERIALIZE_VERSION}")
 
         num_tensors = struct.unpack("<I", f.read(4))[0]
 

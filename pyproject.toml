@@ -38,25 +38,33 @@ dependencies = [
     "numpy>=2.4.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "ruff>=0.8.0",
-    "mypy>=1.13.0",
     "pytest>=8.3.0",
     "pytest-cov>=6.0.0",
     "python-semantic-release>=9.0.0",
-    "commitizen>=4.0.0",
+    "commitizen>=4.13.9",
     "pre-commit>=4.0.0",
+    "interrogate>=1.7.0",
+    "pip-audit>=2.10.0",
+    "pyright>=1.1.408",
+]
+
+gpu = [
+    "cupy-cuda12x>=13.0.0",
+]
+
+notebook = [
     "ipykernel>=7.1.0",
     "ipywidgets>=8.1.8",
     "jupyter>=1.1.1",
     "matplotlib>=3.10.8",
+    "pillow>=12.1.1", # for CVE fix for transitive matplotlib dependency
     "notebook>=7.5.3",
     "datasets>=4.5.0",
 ]
-gpu = [
-    "cupy-cuda12x>=13.0.0",
-]
+
 build = ["uv ~= 0.10.0"]
 
 [project.urls]
@@ -72,12 +80,6 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["sadl"]
 
-[tool.hatch.build.targets.sdist]
-include = [
-    "sadl/",
-    "pyproject.toml",
-]
-
 # =============================================================================
 # Ruff Configuration
 # =============================================================================
@@ -88,25 +90,58 @@ src = ["sadl"]
 exclude = ["notebooks/", "tests/"]
 
 [tool.ruff.lint]
-select = ["E", "W", "F", "I", "B", "C4", "UP", "ARG", "SIM", "PL", "RUF", "D", "ANN", "N"]
+select = [
+    # --- Core ---
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # pyflakes
+    "I",      # isort
+    "N",      # pep8-naming
+    "UP",     # pyupgrade
+    # --- Bug / Code-smell ---
+    "B",      # flake8-bugbear
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "PL",     # pylint
+    "RUF",    # ruff-specific
+    "PIE",    # flake8-pie
+    "PERF",   # perflint
+    "RET",    # flake8-return
+    # --- Documentation / Typing ---
+    "D",      # pydocstyle
+    "ANN",    # flake8-annotations
+    "TC",     # flake8-type-checking
+    # --- Security ---
+    "S",      # flake8-bandit (replaces standalone bandit)
+    # --- Style ---
+    "ARG",    # flake8-unused-arguments
+    "A",      # flake8-builtins (prevent shadowing builtins)
+    "ISC",    # flake8-implicit-str-concat
+    "T20",    # flake8-print (catch stray print() calls)
+    "PTH",    # flake8-use-pathlib
+    "DTZ",    # flake8-datetimez
+    "RSE",    # flake8-raise
+    "TRY",    # tryceratops (exception handling)
+    "LOG",    # flake8-logging
+    # --- Testing ---
+    "PT",     # flake8-pytest-style
+]
 ignore = [
-    "D100",    # Missing docstring in public module
-    "D104",    # Missing docstring in public package
-    "D105",    # Missing docstring in magic method
-    "D107",    # Missing docstring in __init__
-    "D203",    # 1 blank line required before class docstring
-    "D213",    # Multi-line docstring summary should start at second line
-    "ANN002",  # Missing type annotation for *args
-    "ANN003",  # Missing type annotation for **kwargs
-    "ANN204",  # Missing return type annotation for special method
-    "ANN401",  # Dynamically typed expressions (Any) disallowed
-    "N806",    # Variable in function should be lowercase (allow math notation)
-    "PLW0603", # Using global statement (needed for gradient mode)
-    "PLR0912", # Too many branches (parameter traversal)
+    "E501",   # line length — handled by ruff formatter
+    "D100",   # module docstrings — interrogate covers doc coverage
+    "D104",   # __init__.py docstrings — unnecessary boilerplate
+    "TRY003", # long exception messages — too strict for real-world code
+    "ISC001", # implicit string concat single-line — conflicts with ruff formatter
+    "PTH123", # Unnceessary verbose "Path.open" instead of "open" for files
+    "ANN401", # Any not allowed for *args and **kwargs, leads to awkward code
+    "A001",   # Shadowing python buildin attributes is ok, since we use a lot of familiar functions like "max", "sum", ...
+    "A004",   # see "A001"
+    "D105",   # No docstrings needed in magic methods like __sub__, as they are usually self-explanatory
 ]
 
 [tool.ruff.lint.pylint]
 max-args = 10
+max-returns = 8
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
@@ -116,22 +151,35 @@ quote-style = "double"
 indent-style = "space"
 docstring-code-format = true
 
-# =============================================================================
-# MyPy Configuration
-# =============================================================================
-[tool.mypy]
-python_version = "3.13"
-strict = true
-warn_return_any = true
-warn_unused_ignores = true
-show_error_codes = true
-show_column_numbers = true
-pretty = true
-exclude = ["notebooks/", "tests/"]
 
-[[tool.mypy.overrides]]
-module = ["cupy.*"]
-ignore_missing_imports = true
+# =============================================================================
+# Interrogate — Docstring Coverage
+# =============================================================================
+
+[tool.interrogate]
+paths = ["sadl"]
+fail-under = 90
+ignore-init-method = true
+ignore-init-module = true
+ignore-module = true
+exclude = ["tests"]
+
+
+# =============================================================================
+# Pyright — Static Type Checking
+# =============================================================================
+
+[tool.pyright]
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+include = ["sadl"]
+
+reportUnnecessaryIsInstance = false # needed for untyped client code passing in invalid objects to the api
+
+# pyright incorrectly handles "BACKEND" var
+reportConstantRedefinition = false
+reportUnnecessaryComparison = false
 
 # =============================================================================
 # Pytest Configuration
@@ -140,25 +188,34 @@ ignore_missing_imports = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_functions = ["test_*"]
-addopts = ["-v", "--tb=short", "-ra"]
+addopts = [
+    "--strict-markers",
+    "--strict-config",
+    "-ra",
+    "-v",
+    "--tb=short",
+    "--durations=10",
+]
+
 
 # =============================================================================
-# Coverage Configuration
+# Coverage
 # =============================================================================
+
 [tool.coverage.run]
 source = ["sadl"]
 branch = true
 omit = ["tests/*", "*/__init__.py"]
 
 [tool.coverage.report]
-exclude_lines = [
-    "pragma: no cover",
-    "raise NotImplementedError",
-    "if TYPE_CHECKING:",
-    "@abstractmethod",
-]
 fail_under = 80
 show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+    'if __name__ == "__main__"',
+]
 
 # =============================================================================
 # Semantic Release Configuration
@@ -179,36 +236,18 @@ commit_parser = "conventional"
 commit_message = "chore(release): v{version}"
 tag_format = "v{version}"
 
-[tool.semantic_release.commit_parser_options]
-minor_tags = ["feat"]
-patch_tags = ["fix", "perf"]
-parse_squash_commits = true
-ignore_merge_commits = true
-
-[tool.semantic_release.changelog]
-exclude_commit_patterns = [
-    '''chore(?:\([^)]*?\))?: .+''',
-    '''ci(?:\([^)]*?\))?: .+''',
-    '''refactor(?:\([^)]*?\))?: .+''',
-    '''style(?:\([^)]*?\))?: .+''',
-    '''test(?:\([^)]*?\))?: .+''',
-    '''build\((?!deps\): .+)''',
-    '''Initial [Cc]ommit.*''',
-]
-
 [tool.semantic_release.changelog.default_templates]
 changelog_file = "CHANGELOG.md"
 output_format = "md"
 
 [tool.semantic_release.branches.main]
-match = "main"
+match = "(main|master)"
 prerelease = false
 
 [tool.semantic_release.branches.alpha]
-# Matches branches with the prefixes 'feat/', 'fix/', or 'perf/'.
-match = "^(feat|fix|perf)/.+"
-prerelease = true
+match = ".*"
 prerelease_token = "alpha"
+prerelease = true
 
 [tool.semantic_release.remote]
 type = "github"
@@ -217,27 +256,11 @@ name = "origin"
 [tool.semantic_release.remote.token]
 env = "GH_TOKEN"
 
+
 # =============================================================================
-# Commitizen Configuration
+# Commitizen — Local commit message format enforcement only
 # =============================================================================
+
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "1.0.0"
-version_files = ["pyproject.toml:project.version"]
-version_provider = "commitizen"
-version_scheme = "pep440"
 tag_format = "v$version"
-update_changelog_on_bump = false
-changelog_incremental = true
-style = [
-    ["qmark", "fg:#ff9d00 bold"],
-    ["question", "bold"],
-    ["answer", "fg:#ff9d00 bold"],
-    ["pointer", "fg:#ff9d00 bold"],
-    ["highlighted", "fg:#ff9d00 bold"],
-    ["selected", "fg:#cc5454"],
-    ["separator", "fg:#cc5454"],
-    ["instruction", ""],
-    ["text", ""],
-    ["disabled", "fg:#858585 italic"]
-]

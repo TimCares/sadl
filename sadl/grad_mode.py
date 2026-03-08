@@ -18,7 +18,7 @@ class no_grad:  # noqa: N801
     """Context manager to disable gradient tracking in the context."""
 
     def __enter__(self) -> Self:
-        global _GRAD_MODE_ENABLED
+        global _GRAD_MODE_ENABLED  # noqa: PLW0603
         self.prev = _GRAD_MODE_ENABLED
         _GRAD_MODE_ENABLED = False
         return self
@@ -29,7 +29,7 @@ class no_grad:  # noqa: N801
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
-        global _GRAD_MODE_ENABLED
+        global _GRAD_MODE_ENABLED  # noqa: PLW0603
         _GRAD_MODE_ENABLED = self.prev
 
 
@@ -40,7 +40,7 @@ def set_global_grad_mode(enabled: bool) -> None:
         enabled (bool): Whether to enable or disable
             gradient tracking.
     """
-    global _GRAD_MODE_ENABLED
+    global _GRAD_MODE_ENABLED  # noqa: PLW0603
     _GRAD_MODE_ENABLED = enabled
     logger.debug(f"Gradient tracking {'enabled' if enabled else 'disabled'}")
 

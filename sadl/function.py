@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import logging
+import math
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 
-from .backend import TensorDevice, no_grad_fn, xp
-from .tensor import Parameter, Tensor
+from sadl.backend.dtype import Float32
+
+from .backend import TensorDevice, TensorDType, get_rng
+from .grad_mode import no_grad_fn
+from .ops import exp, log, maximum
+from .tensor import Parameter, Tensor, zeros
 from .utils import traverse_attrs
 
 if TYPE_CHECKING:
@@ -16,9 +21,6 @@ if TYPE_CHECKING:
 
 
 logger = logging.getLogger(__name__)
-
-
-RNG = xp.random.default_rng()
 
 
 class Function(ABC):
@@ -34,16 +36,17 @@ class Function(ABC):
     """
 
     @abstractmethod
-    def __call__(self, x: Tensor, **kwargs: Any) -> Any:
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         """Forward pass.
 
         Args:
-            x (Tensor): Input
-            **kwargs (Any): Additional input.
+            *args (Any): Positional arguments.
+            **kwargs (Any): Keyword arguments.
 
         Returns:
-            Any: Some transformed output.
+            Any: Some (transformed) output.
         """
+        ...
 
     def traverse_parameters(
         self,
@@ -264,7 +267,7 @@ class Function(ABC):
 class Sigmoid(Function):
     """Sigmoid activation function."""
 
-    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:
         """Forward pass, computes the sigmoid activation function.
 
         Args:
@@ -273,13 +276,13 @@ class Sigmoid(Function):
         Returns:
             Tensor: Transformed output
         """
-        return cast(Tensor, 1 / (xp.exp(-x) + 1))
+        return 1 / (exp(-x) + 1)
 
 
 class Softmax(Function):
     """Softmax activation function."""
 
-    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:
         """Forward pass, computes the softmax activation function.
 
         Args:
@@ -289,8 +292,8 @@ class Softmax(Function):
             Tensor: Transformed output
         """
         x = x - x.max(axis=-1, keepdims=True)  # for numerical stability
-        x = xp.exp(x)
-        return cast(Tensor, x / x.sum(axis=-1, keepdims=True))
+        x = exp(x)
+        return x / x.sum(axis=-1, keepdims=True)
 
 
 class LogSoftmax(Function):
@@ -299,7 +302,7 @@ class LogSoftmax(Function):
     Mathematically: `log(softmax(x))`.
     """
 
-    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:
         """Forward pass, computes softmax followed by the logarithm.
 
         Args:
@@ -309,14 +312,13 @@ class LogSoftmax(Function):
             Tensor: Transformed output
         """
         x = x - x.max(axis=-1, keepdims=True)
-        x = x - xp.log(xp.sum(xp.exp(x), axis=-1, keepdims=True))
-        return x
+        return x - log(exp(x).sum(axis=-1, keepdims=True))
 
 
 class ReLU(Function):
     """ReLU activation function."""
 
-    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:
         """Forward pass, computes the ReLU activation function.
 
         Args:
@@ -325,17 +327,13 @@ class ReLU(Function):
         Returns:
             Tensor: Transformed output
         """
-        return cast(Tensor, xp.maximum(xp.array([0]), x))
+        from .tensor import zeros_like  # noqa: PLC0415
+
+        return maximum(zeros_like(x), x)
 
 
 class Linear(Function):
-    """Base dense/linear neural network layer.
-
-    Args:
-        dim_in (int): Input dimension size.
-        dim_out (int): Output dimension size.
-        bias (bool): Whether to use a bias. Defaults to True
-    """
+    """Base dense/linear neural network layer."""
 
     def __init__(
         self,
@@ -343,19 +341,31 @@ class Linear(Function):
         dim_in: int,
         dim_out: int,
         bias: bool = True,
-        dtype: xp.dtype = xp.float32,
+        dtype: TensorDType | None = None,
     ) -> None:
+        """Initialize the linear layer.
+
+        Args:
+            dim_in (int): Input dimension size.
+            dim_out (int): Output dimension size.
+            bias (bool, optional): Whether to use a bias term. Defaults to True.
+            dtype (TensorDType | None, optional): Data type for the weights and bias.
+                If None, defaults to Float32. Defaults to None.
+        """
+        if dtype is None:
+            dtype = Float32()
+
         self.dim_in = dim_in
         self.dim_out = dim_out
         # Xavier initialization for weights
+        scale = math.sqrt(2.0 / (self.dim_in + self.dim_out))
         self.W = Parameter(
-            RNG.random((self.dim_in, self.dim_out)).astype(dtype)
-            * xp.sqrt(2.0 / (self.dim_in + self.dim_out))
+            get_rng().random((self.dim_in, self.dim_out)).astype(dtype.to_backend()) * scale
         )
-        self.b = Parameter(xp.zeros((self.dim_out,), dtype=dtype)) if bias else None
+        self.b = Parameter(zeros((self.dim_out,)).astype(dtype)) if bias else None
         self.INPUT_N_DIM = 2
 
-    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:
         """Forward pass.
 
         Args:
@@ -364,14 +374,15 @@ class Linear(Function):
         Returns:
             Tensor: Transformed output
         """
-        assert x.ndim == self.INPUT_N_DIM, (
-            "Input must have two dimensions, dim[0] -> sample dim, dim[1] -> feature dim"
-        )
-        assert x.shape[1] == self.dim_in, (
-            "Input feature dim must match layer input dim/embedding size"
-        )
-        x = xp.matmul(x, self.W)
-        x = x + self.b if self.b is not None else x
+        if x.ndim != self.INPUT_N_DIM:
+            raise ValueError(
+                "Input must have two dimensions, dim[0] -> sample dim, dim[1] -> feature dim"
+            )
+        if x.shape[1] != self.dim_in:
+            raise ValueError("Input feature dim must match layer input dim/embedding size")
+        x = x @ self.W
+        if self.b is not None:
+            x = x + self.b
         return x
 
 
@@ -379,9 +390,14 @@ class Mlp(Function):
     """Multi-Layer-Perceptron."""
 
     def __init__(self, layers: list[Function]) -> None:
+        """Initialize the MLP.
+
+        Args:
+            layers (list[Function]): Ordered list of layers to apply sequentially.
+        """
         self.layers = layers
 
-    def __call__(self, x: Tensor) -> Tensor:  # type: ignore[override]
+    def __call__(self, x: Tensor) -> Tensor:
         """Forward pass.
 
         Calls all layers subsequently in the order

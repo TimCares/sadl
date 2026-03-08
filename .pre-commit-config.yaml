@@ -1,55 +1,6 @@
-# =============================================================================
-# Pre-commit Configuration
-# =============================================================================
-# Install hooks: make pre-commit-install
-# Run manually:  make pre-commit
-# =============================================================================
+default_install_hook_types: [pre-commit, commit-msg]
 
 repos:
-  # -------------------------------------------------------------------------
-  # Code Quality (using local uv to match Makefile exactly)
-  # -------------------------------------------------------------------------
-  - repo: local
-    hooks:
-      - id: ruff-check
-        name: ruff check (lint)
-        entry: uv run ruff check --fix
-        language: system
-        types: [python]
-        require_serial: true
-        exclude: ^(notebooks|tests)/
-
-      - id: ruff-format
-        name: ruff format
-        entry: uv run ruff format
-        language: system
-        types: [python]
-        require_serial: true
-        exclude: ^(notebooks|tests)/
-
-      - id: mypy
-        name: mypy (typecheck)
-        entry: uv run mypy
-        language: system
-        types: [python]
-        require_serial: true
-        pass_filenames: false
-        args: ["."]
-        exclude: ^(notebooks|tests)/
-
-  # -------------------------------------------------------------------------
-  # Commit Message Validation (Commitizen)
-  # -------------------------------------------------------------------------
-  - repo: https://github.com/commitizen-tools/commitizen
-    rev: v4.13.4
-    hooks:
-      - id: commitizen
-      - id: commitizen-branch
-        stages: [pre-push]
-
-  # -------------------------------------------------------------------------
-  # General Checks
-  # -------------------------------------------------------------------------
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v5.0.0
     hooks:
@@ -58,6 +9,57 @@ repos:
       - id: check-yaml
       - id: check-toml
       - id: check-added-large-files
-        args: [--maxkb=2000]
+        args: [--maxkb=500]
       - id: check-merge-conflict
       - id: debug-statements
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.2
+    hooks:
+      - id: ruff-format
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/commitizen-tools/commitizen
+    rev: v4.13.9
+    hooks:
+      - id: commitizen
+        stages: [commit-msg]
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.3
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+        exclude: ^(notebooks|tests)/
+
+      - id: interrogate
+        name: interrogate
+        entry: uv run interrogate
+        language: system
+        types: [python]
+        pass_filenames: false
+        exclude: ^(notebooks|tests)/
+
+      - id: pytest
+        name: pytest
+        entry: uv run pytest
+        language: system
+        types: [python]
+        pass_filenames: false
+        always_run: true
+
+      - id: pip-audit
+        name: pip-audit
+        entry: uv run pip-audit --ignore-vuln PYSEC-2022-42969 # ignore python-semantic-release vulnerability, only affects development
+        language: system
+        pass_filenames: false
+        always_run: true

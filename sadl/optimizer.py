@@ -4,9 +4,11 @@ from collections import OrderedDict
 from collections.abc import Callable, Iterable, ValuesView
 from itertools import chain
 
-from .backend import TensorDevice, no_grad, no_grad_fn, xp
-from .tensor import Parameter, Tensor, tensor
-from .utils import traverse_attrs, zeros_like
+from .backend import TensorDevice
+from .grad_mode import no_grad, no_grad_fn
+from .ops import sqrt
+from .tensor import Parameter, Tensor, tensor, zeros_like
+from .utils import traverse_attrs
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +64,13 @@ class Optimizer(ABC):
     **All optimizer states must be of type `Tensor` or a collection of type `Tensor`**.
     """
 
-    def __init__(self, params: list[Parameter], *, lr: float = 1e-3):
+    def __init__(self, params: list[Parameter], *, lr: float = 1e-3) -> None:
+        """Initialize the optimizer.
+
+        Args:
+            params (list[Parameter]): Parameters to optimize.
+            lr (float, optional): The learning rate. Defaults to 1e-3.
+        """
         if len(params) == 0:
             raise ValueError("Must pass at least one parameter to optimize.")
         for param in params:
@@ -246,15 +254,19 @@ class Optimizer(ABC):
         """Clears computation graph structure and gradients after backward pass.
 
         Removes references to parent tensors, backward functions, and operation
-        context to free memory. Gradients are cleared for non-parameter tensors
-        (keep_grad=False).
+        context to free memory. Gradients are preserved for nodes with
+        `keep_grad=True` (i.e. parameters).
 
         Args:
             topo_nodes (Iterator[Tensor]): Nodes in topological order from the
                 computation graph to clear.
         """
         for node in topo_nodes:
-            node.detach(in_place=True)
+            node.src = ()
+            node.backward_fn = None
+            node.op_ctx = {}
+            if not node.keep_grad:
+                node.grad = None
 
     def _clear_activation_gradients(self, topo_nodes: Iterable[Tensor]) -> None:
         """Clears gradients of activation tensors before backward pass.
@@ -300,10 +312,9 @@ class Optimizer(ABC):
         # (this is necessary to make "node.grad is None" below well-defined)
         self._clear_activation_gradients(topo_nodes=node_order)
 
-        # do not use xp.ones_like(loss) here, because "loss" is a Tensor that requires
-        # a gradient, which will trigger "__array_function__" and try to track this
-        # -> another fix would be moving it down in the "no_grad()" context
-        loss.grad = xp.ones(loss.shape, dtype=loss.dtype)  # seed gradient for loss
+        backend = loss.array_module
+
+        loss.grad = backend.ones_like(loss.data)  # seed gradient for loss
 
         with no_grad():
             for node in reversed(node_order):
@@ -326,20 +337,30 @@ class Optimizer(ABC):
 
                 logger.debug(f'Calling backward function: "{node.backward_fn.__name__}"')
 
+                array_src = [s.data for s in node.src]
+
                 src_grads = node.backward_fn(
-                    *node.src,
+                    *array_src,
                     compute_grad=src_requires_grad,
                     grad_out=node.grad,
                     **node.op_ctx,
                 )
-                assert len(src_grads) == len(node.src)
+                if len(src_grads) != len(node.src):
+                    raise RuntimeError(
+                        f"backward_fn returned {len(src_grads)} gradients but node has {len(node.src)} sources"
+                    )
 
                 for src, src_grad in zip(node.src, src_grads, strict=True):
                     if src_grad is None:
                         continue
 
-                    assert src.shape == src_grad.shape
-                    current_src_grad = src.grad if src.grad is not None else xp.zeros_like(src)
+                    if src.shape != src_grad.shape:
+                        raise RuntimeError(
+                            f"Gradient shape {src_grad.shape} does not match source shape {src.shape}"
+                        )
+                    current_src_grad = (
+                        src.grad if src.grad is not None else backend.zeros_like(src.data)
+                    )
                     src.grad = current_src_grad + src_grad
 
         self._clear_graph(topo_nodes=node_order)
@@ -378,7 +399,7 @@ class SGD(Optimizer):
         lr: float = 1e-3,
         friction: float = 1,
         weight_decay: float = 0,
-    ):
+    ) -> None:
         """The stochastic gradient descent optimizer.
 
         Note: By default, vanilla SGD is used. However, when setting
@@ -433,7 +454,7 @@ class SGD(Optimizer):
                 # is (1-self.friction)
                 # we add param.grad as new force from the current position
                 self.m[idx] = (1 - self.friction) * self.m[idx] + param.grad
-                grad = self.m[idx]
+                grad = self.m[idx].data
             else:
                 grad = param.grad
 
@@ -455,7 +476,7 @@ class Adam(Optimizer):
         beta_2: float = 0.999,
         epsilon: float = 1e-8,
         weight_decay: float = 0,
-    ):
+    ) -> None:
         """The Adam optimizer.
 
         Note: By setting `weight_decay` > 0 this becomes `AdamW`.
@@ -499,7 +520,7 @@ class Adam(Optimizer):
         Raises:
             ValueError: If a parameter has no gradient.
         """
-        self.t = tensor(self.t + 1)
+        self.t = self.t + 1
 
         for idx, param in enumerate(self.params):
             if param.grad is None:
@@ -508,14 +529,14 @@ class Adam(Optimizer):
             self.m[idx] = self.beta_1 * self.m[idx] + (1 - self.beta_1) * param.grad
             self.v[idx] = self.beta_2 * self.v[idx] + (1 - self.beta_2) * param.grad**2
 
-            lr_t = self.lr * xp.sqrt(1 - self.beta_2**self.t) / (1 - self.beta_1**self.t)
+            lr_t = self.lr * sqrt(1 - self.beta_2**self.t) / (1 - self.beta_1**self.t)
 
-            epsilon_hat = self.epsilon * xp.sqrt(1 - self.beta_2**self.t)
+            epsilon_hat = self.epsilon * sqrt(1 - self.beta_2**self.t)
 
             # [...] -> in-place assignment
             param[...] = (
                 (1 - self.lr * self.weight_decay) * param  # weight decay part
-                - lr_t * self.m[idx] / (xp.sqrt(self.v[idx]) + epsilon_hat)  # gradient part
+                - lr_t * self.m[idx] / (sqrt(self.v[idx]) + epsilon_hat)  # gradient part
             )
 
 

@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TypeVar
-
-from .backend import is_global_grad_mode_enabled, xp
-from .tensor import Tensor
+from typing import TYPE_CHECKING, Any, TypeVar, cast
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -42,7 +39,7 @@ def traverse_attrs(
     )
     _forbidden: tuple[type, ...] = (target_type, *_recurse_into)
 
-    def _handle(
+    def _handle(  # noqa: PLR0912
         parent: Any,
         key: str | int,
         item: Any,
@@ -68,6 +65,7 @@ def traverse_attrs(
                 recurse_into=_recurse_into,
             )
         elif isinstance(item, set):
+            item = cast("set[Any]", item)
             for elem in item:
                 if isinstance(elem, _forbidden):
                     raise TypeError(
@@ -76,6 +74,7 @@ def traverse_attrs(
                         f"these types (no stable ordering)."
                     )
         elif isinstance(item, tuple):
+            item = cast("tuple[Any, ...]", item)
             for i, elem in enumerate(item):
                 if isinstance(elem, _forbidden):
                     raise TypeError(
@@ -86,57 +85,13 @@ def traverse_attrs(
                 # Still traverse nested structures (e.g., tuple containing a dict)
                 _handle(item, i, elem, f"{path}[{i}]")
         elif isinstance(item, list):
+            item = cast("list[Any]", item)
             for i, elem in enumerate(item):
                 _handle(item, i, elem, f"{path}[{i}]")
         elif isinstance(item, dict):
+            item = cast("dict[str, Any]", item)
             for k, v in item.items():
                 _handle(item, k, v, f"{path}{{{k}}}")
 
     for attr_name, attr_value in vars(root).items():
         _handle(root, attr_name, attr_value, attr_name)
-
-
-def ones_like(
-    other: Tensor,
-    *,
-    dtype: Any = None,
-    requires_grad: bool = False,
-) -> Tensor:
-    """Create a Tensor of ones with the same shape and device as `other`.
-
-    Args:
-        other (Tensor): The tensor to match shape and device from.
-        dtype (Any): Override dtype. Defaults to None (use other's dtype).
-        requires_grad (bool): Whether to track gradients. Defaults to False.
-
-    Returns:
-        Tensor: A tensor of ones.
-    """
-    # Use xp.ones(shape) instead of xp.ones_like(tensor) to avoid
-    # triggering __array_function__ on the Tensor
-    result: Tensor = xp.ones(other.shape, dtype=dtype or other.dtype).view(Tensor)
-    result.requires_grad = is_global_grad_mode_enabled() and requires_grad
-    return result
-
-
-def zeros_like(
-    other: Tensor,
-    *,
-    dtype: Any = None,
-    requires_grad: bool = False,
-) -> Tensor:
-    """Create a Tensor of zeros with the same shape and device as `other`.
-
-    Args:
-        other (Tensor): The tensor to match shape and device from.
-        dtype (Any): Override dtype. Defaults to None (use other's dtype).
-        requires_grad (bool): Whether to track gradients. Defaults to False.
-
-    Returns:
-        Tensor: A tensor of zeros.
-    """
-    # Use xp.zeros(shape) instead of xp.zeros_like(tensor) to avoid
-    # triggering __array_function__ on the Tensor
-    result: Tensor = xp.zeros(other.shape, dtype=dtype or other.dtype).view(Tensor)
-    result.requires_grad = is_global_grad_mode_enabled() and requires_grad
-    return result

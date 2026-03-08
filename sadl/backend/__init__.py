@@ -1,43 +1,41 @@
 """Backend for all ops in SADL."""
 
-from .backend import (
+from .array_provider import (
     BACKEND,
+    ArrayModule,
+    NDArray,
+    NDArrayLike,
+)
+from .device import (
     DeviceLike,
     DeviceType,
     SupportsCupyDevice,
     TensorDevice,
-    normalize_device,
-    xp,
 )
-from .grad_mode import (
-    is_global_grad_mode_enabled,
-    no_grad,
-    no_grad_fn,
-    set_global_grad_mode,
+from .dtype import (
+    TensorDType,
 )
-from .grad_ops import (
-    GradOp,
-    get_grad_op,
-    normalize_grad_op_name,
+from .random import (
+    get_rng,
 )
-from .ops import (
+from .utils import (
     copy_array,
+    get_array_module,
+    get_array_module_from_device,
 )
 
 __all__ = [
     "BACKEND",
+    "ArrayModule",
     "DeviceLike",
     "DeviceType",
-    "GradOp",
+    "NDArray",
+    "NDArrayLike",
     "SupportsCupyDevice",
+    "TensorDType",
     "TensorDevice",
     "copy_array",
-    "get_grad_op",
-    "is_global_grad_mode_enabled",
-    "no_grad",
-    "no_grad_fn",
-    "normalize_device",
-    "normalize_grad_op_name",
-    "set_global_grad_mode",
-    "xp",
+    "get_array_module",
+    "get_array_module_from_device",
+    "get_rng",
 ]

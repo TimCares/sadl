@@ -27,7 +27,7 @@ jobs:
         run: make install-dev
 
       - name: Run static checks
-        run: make ci-lint
+        run: make ci-check
 
   test:
     name: Test

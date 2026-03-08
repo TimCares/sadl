@@ -18,8 +18,8 @@ def test_tensor_operations() -> None:
     """Test basic tensor creation and operations."""
     x = sadl.tensor([1.0, 2.0, 3.0], requires_grad=True)
     y = x * 2
-    loss = y.sum()
-    assert float(loss) == 12.0, f"Expected 12.0, got {float(loss)}"
+    loss = y.sum().item()
+    assert loss == 12.0, f"Expected 12.0, got {loss}"
 
 
 def test_model_forward() -> None:
