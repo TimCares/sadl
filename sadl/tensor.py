@@ -433,6 +433,7 @@ class Parameter(Tensor):
             requires_grad=True,
             keep_grad=True,
         )
+        self.requires_grad = True  # Tensor.__init__ might set requires_grad=False if global grad tracking is disabled
         self.is_training = is_training
 
     def copy_to_device(self, device: TensorDevice) -> Parameter:
