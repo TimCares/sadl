@@ -7,6 +7,8 @@ to verify the built wheel works correctly.
 
 import sadl
 
+import numpy as np
+
 
 def test_version() -> None:
     """Verify version is accessible."""
@@ -18,7 +20,7 @@ def test_tensor_operations() -> None:
     """Test basic tensor creation and operations."""
     x = sadl.tensor([1.0, 2.0, 3.0], requires_grad=True)
     y = x * 2
-    loss = y.sum().item()
+    loss = np.sum(y).item()
     assert loss == 12.0, f"Expected 12.0, got {loss}"
 
 

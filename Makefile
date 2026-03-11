@@ -1,8 +1,8 @@
 # SADL Makefile
 
-.PHONY: help install install-dev sync lint format typecheck ci-lint test \
+.PHONY: help install install-dev sync lint format typecheck ci-lint test coverage \
         test-install test-all check clean-cache clean-all pre-commit run build publish publish-test \
-        version commit
+        version commit badges
 
 .DEFAULT_GOAL := help
 
@@ -52,7 +52,10 @@ format-check: ## Check code formatting without changes
 	uv run ruff format --check .
 
 docstring-check: ## Check docstring coverage
-	uv run interrogate
+	uv run interrogate -v
+
+badges: ## Regenerate badges (interrogate docstring coverage)
+	uv run interrogate --generate-badge assets --badge-format png --badge-style flat
 
 lint: ## Run linter (ruff)
 	uv run ruff check .
@@ -70,6 +73,9 @@ typecheck: ## Run type checker (pyright)
 test: ## Run tests
 	uv run pytest
 
+coverage: ## Run tests with coverage (grad_ops.py)
+	uv run pytest --cov --cov-report=term-missing --cov-report=xml
+
 test-v: ## Run tests with verbose output
 	uv run pytest -v
 
@@ -80,7 +86,7 @@ test-install: build-only ## Test installation from built wheel
 	@chmod +x tests/test_install.sh
 	@./tests/test_install.sh
 
-test-all: test test-install ## Run all tests including installation test
+test-all: coverage test-install ## Run all tests including installation test
 	@echo "$(GREEN) All tests passed!$(RESET)"
 
 # =============================================================================
@@ -90,7 +96,7 @@ test-all: test test-install ## Run all tests including installation test
 ci-check: format-check docstring-check lint typecheck ## Run all static checks (CI)
 	@echo "$(GREEN) All static checks passed!$(RESET)"
 
-check: format docstring-check lint typecheck test-all ## Run all checks (format, docstring, lint, typecheck, test, test install)
+check: format docstring-check lint typecheck test-all ## Run all checks (format, docstring, lint, typecheck, coverage, test install)
 	@echo "$(GREEN) All checks passed!$(RESET)"
 
 # =============================================================================
@@ -132,6 +138,7 @@ version: ## Show current version
 clean-cache: ## Remove caches
 	rm -rf .pytest_cache
 	rm -rf .ruff_cache
+	rm -f coverage.xml
 	rm -rf *.egg-info
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 	find . -type f -name "*.pyc" -delete 2>/dev/null || true

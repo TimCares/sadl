@@ -18,6 +18,7 @@ class no_grad:  # noqa: N801
     """Context manager to disable gradient tracking in the context."""
 
     def __enter__(self) -> Self:
+        """Set the grad mode to False when entering the context."""
         global _GRAD_MODE_ENABLED  # noqa: PLW0603
         self.prev = _GRAD_MODE_ENABLED
         _GRAD_MODE_ENABLED = False
@@ -29,6 +30,7 @@ class no_grad:  # noqa: N801
         exc_val: BaseException | None,
         exc_tb: TracebackType | None,
     ) -> None:
+        """Set the grad mode to the value recorded before entering the context."""
         global _GRAD_MODE_ENABLED  # noqa: PLW0603
         _GRAD_MODE_ENABLED = self.prev
 
@@ -73,6 +75,7 @@ def no_grad_fn(fn: Callable[P, T]) -> Callable[P, T]:
     """
 
     def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        """Wrapper func being executed when the original `fn` is called by the client."""
         with no_grad():
             return fn(*args, **kwargs)
 

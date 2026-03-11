@@ -19,10 +19,13 @@ git clone https://github.com/timcares/sadl.git
 cd sadl
 
 # Install dev dependencies (requires uv)
-uv sync --extra dev
+uv sync --dev
 
-# Or with GPU support (requires CUDA)
-uv sync --extra dev --extra gpu
+# GPU support (requires CUDA)
+uv sync --dev --group gpu
+
+# Run notebooks
+uv sync --dev --group notebook
 
 # Install pre-commit hooks (recommended)
 make bootstrap

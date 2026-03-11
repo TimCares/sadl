@@ -45,7 +45,13 @@ jobs:
         run: make install-dev
 
       - name: Run tests
-        run: make test
+        run: make coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: ./coverage.xml
+          fail_ci_if_error: false
 
   build:
     name: Build Package
@@ -121,14 +127,38 @@ jobs:
           enable-cache: true
           python-version: "3.13"
 
+      - name: Install dependencies
+        run: uv sync --dev
+
+      - name: Regenerate badges
+        run: make badges
+
+      - name: Commit badge updates
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git add assets/
+          git diff --staged --quiet || git commit -m "chore: update badges"
+
       - name: Python Semantic Release
         id: release
-        uses: python-semantic-release/python-semantic-release@v10.5.3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          git_committer_name: "github-actions"
-          git_committer_email: "actions@users.noreply.github.com"
-          build: "false"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GIT_COMMITTER_NAME: github-actions
+          GIT_COMMITTER_EMAIL: actions@users.noreply.github.com
+        run: |
+          # Phase 1: Stamp version into pyproject.toml (no commit)
+          uv run semantic-release version --skip-build --no-commit --no-tag --no-changelog || true
+          # Phase 2: Update uv.lock with new version, stage it, then commit via PSR
+          uv lock --upgrade-package py-sadl
+          git add uv.lock
+          if uv run semantic-release version --skip-build; then
+            echo "released=true" >> $GITHUB_OUTPUT
+            echo "tag=$(git describe --tags --abbrev=0)" >> $GITHUB_OUTPUT
+            echo "version=$(git describe --tags --abbrev=0 | sed 's/^v//')" >> $GITHUB_OUTPUT
+          else
+            echo "released=false" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build package
         if: steps.release.outputs.released == 'true'

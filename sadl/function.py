@@ -6,18 +6,19 @@ import logging
 import math
 from abc import ABC, abstractmethod
 from collections import OrderedDict
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
-from sadl.backend.dtype import Float32
+import numpy as np
+import numpy.typing as npt
 
-from .backend import TensorDevice, TensorDType, get_rng
 from .grad_mode import no_grad_fn
-from .ops import exp, log, maximum
-from .tensor import Parameter, Tensor, zeros
+from .tensor import Parameter, Tensor, tensor
 from .utils import traverse_attrs
 
 if TYPE_CHECKING:
     from collections.abc import Callable, ValuesView
+
+    from .backend import TensorDevice
 
 
 logger = logging.getLogger(__name__)
@@ -276,7 +277,7 @@ class Sigmoid(Function):
         Returns:
             Tensor: Transformed output
         """
-        return 1 / (exp(-x) + 1)
+        return 1 / (np.exp(-x) + 1)
 
 
 class Softmax(Function):
@@ -291,9 +292,9 @@ class Softmax(Function):
         Returns:
             Tensor: Transformed output
         """
-        x = x - x.max(axis=-1, keepdims=True)  # for numerical stability
-        x = exp(x)
-        return x / x.sum(axis=-1, keepdims=True)
+        x = x - np.max(cast("Any", x), axis=-1, keepdims=True)  # for numerical stability
+        x = np.exp(x)
+        return x / np.sum(cast("Any", x), axis=-1, keepdims=True)
 
 
 class LogSoftmax(Function):
@@ -311,8 +312,8 @@ class LogSoftmax(Function):
         Returns:
             Tensor: Transformed output
         """
-        x = x - x.max(axis=-1, keepdims=True)
-        return x - log(exp(x).sum(axis=-1, keepdims=True))
+        x = x - np.max(cast("Any", x), axis=-1, keepdims=True)
+        return x - np.log(np.sum(np.exp(x), axis=-1, keepdims=True))
 
 
 class ReLU(Function):
@@ -327,9 +328,8 @@ class ReLU(Function):
         Returns:
             Tensor: Transformed output
         """
-        from .tensor import zeros_like  # noqa: PLC0415
-
-        return maximum(zeros_like(x), x)
+        zero = tensor([0], device=x.device)
+        return cast("Tensor", np.maximum(cast("Any", zero), cast("Any", x)))
 
 
 class Linear(Function):
@@ -341,7 +341,7 @@ class Linear(Function):
         dim_in: int,
         dim_out: int,
         bias: bool = True,
-        dtype: TensorDType | None = None,
+        dtype: npt.DTypeLike | None = None,
     ) -> None:
         """Initialize the linear layer.
 
@@ -349,20 +349,20 @@ class Linear(Function):
             dim_in (int): Input dimension size.
             dim_out (int): Output dimension size.
             bias (bool, optional): Whether to use a bias term. Defaults to True.
-            dtype (TensorDType | None, optional): Data type for the weights and bias.
-                If None, defaults to Float32. Defaults to None.
+            dtype (npt.DTypeLike | None, optional): Data type for the weights and bias.
+                If None, defaults to np.float32. Defaults to None.
         """
         if dtype is None:
-            dtype = Float32()
+            dtype = np.float32
+
+        rng = np.random.default_rng()
 
         self.dim_in = dim_in
         self.dim_out = dim_out
         # Xavier initialization for weights
         scale = math.sqrt(2.0 / (self.dim_in + self.dim_out))
-        self.W = Parameter(
-            get_rng().random((self.dim_in, self.dim_out)).astype(dtype.to_backend()) * scale
-        )
-        self.b = Parameter(zeros((self.dim_out,)).astype(dtype)) if bias else None
+        self.W = Parameter(rng.random((self.dim_in, self.dim_out)).astype(dtype) * scale)
+        self.b = Parameter(np.zeros((self.dim_out,), dtype=dtype)) if bias else None
         self.INPUT_N_DIM = 2
 
     def __call__(self, x: Tensor) -> Tensor:

@@ -6,36 +6,26 @@ import logging
 from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
+import numpy.typing as npt
+from numpy.lib.mixins import NDArrayOperatorsMixin
 
+from . import ops
 from .backend import (
-    ArrayModule,
     DeviceLike,
     NDArray,
     NDArrayLike,
     TensorDevice,
-    TensorDType,
     copy_array,
-    get_array_module,
+    is_ndarray,
 )
-from .backend.dtype import Float32
 from .grad_mode import is_global_grad_mode_enabled
+from .grad_ops import normalize_grad_op_name
 
 if TYPE_CHECKING:
-    from . import ops as _ops_mod
+    from collections.abc import Iterable, Mapping
+
     from .grad_ops import GradOp
-else:
 
-    class _OpsFacade:
-        """Deferred proxy for the ops module (avoids tensor <-> ops import cycle)."""
-
-        def __getattr__(self, name: str) -> Any:
-            from . import ops  # noqa: PLC0415
-
-            value = getattr(ops, name)
-            setattr(self, name, value)
-            return value
-
-    _ops_mod = _OpsFacade()
 
 logger = logging.getLogger(__name__)
 
@@ -60,31 +50,7 @@ def _unwrap_tensor_index(key: Any) -> Any:
     return key
 
 
-def _ensure_comparable(x: Tensor, y: object) -> None:
-    """Validate that a comparison target is compatible with `x`'s device.
-
-    Args:
-        x (Tensor): Tensor that is used in the comparison.
-        y (object): Object the Tensor is compared to.
-
-    Raises:
-        RuntimeError: If `y` is not on the same device as `x`.
-    """
-    if isinstance(y, Tensor):
-        other_device = y.device
-    elif isinstance(y, NDArray):
-        y = cast("NDArray", y)
-        other_device = TensorDevice.create(getattr(y, "device", "cpu"))
-    else:
-        return
-
-    if x.device != other_device:
-        raise RuntimeError(
-            f"Tensor comparison requires matching devices, found {x.device} and {other_device}."
-        )
-
-
-class Tensor:
+class Tensor(NDArrayOperatorsMixin):
     """A tensor wrapper around arrays with autograd support."""
 
     def __init__(
@@ -116,30 +82,61 @@ class Tensor:
         self.backward_fn: GradOp | None = None
         self.op_ctx: dict[str, Any] = {}
 
-    @property
-    def data(self) -> NDArray:
-        """The backing ndarray buffer.
-
-        Returns:
-            NDArray: The raw array owned by this Tensor.
-        """
-        return self._data
-
-    @data.setter
-    def data(self, value: NDArray) -> None:
-        """Set the backing buffer and refresh the owning array module cache.
+    def __array_ufunc__(
+        self,
+        ufunc: np.ufunc,
+        method: str,
+        *inputs: Any,
+        **kwargs: Any,
+    ) -> Any:
+        """Method called when numpy/cupy ufuncs are called on Tensors, e.g. `np.sum`.
 
         Args:
-            value (NDArray): New array buffer to assign.
+            ufunc (np.ufunc): The numpy/cupy ufunc.
+            method (str): Which type of ufunc this is. Important to detect reduction operations
+                like `np.sum`.
+            *inputs (Any): All inputs to the ufunc.
+            **kwargs (Any): Additional kwargs to the ufunc. A common example is `axis`.
+
+        Returns:
+            Any: The Tensor resulting from the numpy/cupy operation.
         """
-        if not isinstance(value, NDArray):
-            raise TypeError(
-                "Tensor class expects an array as data, "
-                "If you would like to provide a list or scalar "
-                "use the 'tensor' factory function instead."
-            )
-        self._data = value
-        self._xp = get_array_module(value)
+        op_name = normalize_grad_op_name(name=ufunc.__name__, is_reduce=method == "reduce")
+
+        func = getattr(ufunc, method)
+
+        from .dispatch import (  # noqa: PLC0415 (avoid circual import between tensor.py and dispatch.py)
+            dispatch_op,
+        )
+
+        return dispatch_op(op_name, op_fn=func, op_inputs=inputs, **kwargs)
+
+    def __array_function__(
+        self,
+        func: Any,
+        types: Iterable[type],
+        args: Iterable[Any],
+        kwargs: Mapping[str, Any],
+    ) -> Any:
+        """Method called when numpy/cupy array functions are called on Tensors, e.g. `np.matmul`.
+
+        Args:
+            func (Any): The numpy/cupy array function.
+            types (Iterable[type]): Types of the input args to the function. Ignored, types are
+                detected from `args` at runtime.
+            args (Iterable[Any]): All inputs to the array function.
+            kwargs (Mapping[str, Any]): Additional kwargs to the ufunc. A common example is `axis`.
+
+        Returns:
+            Any: The Tensor resulting from the numpy/cupy operation.
+        """
+        op_name = normalize_grad_op_name(name=func.__name__)
+
+        from .dispatch import (  # noqa: PLC0415 (avoid circual import between tensor.py and dispatch.py)
+            dispatch_op,
+        )
+
+        return dispatch_op(op_name, op_fn=func, op_inputs=args, **kwargs)
 
     @property
     def device(self) -> TensorDevice:
@@ -169,13 +166,13 @@ class Tensor:
         return len(self.shape)
 
     @property
-    def dtype(self) -> TensorDType:
+    def dtype(self) -> npt.DTypeLike:
         """Data type of the data.
 
         Returns:
-            TensorDType: Element type of the backing array.
+            npt.DTypeLike: Element type of the backing array.
         """
-        return TensorDType.from_backend(self.data.dtype)
+        return self.data.dtype
 
     @property
     def size(self) -> int:
@@ -184,18 +181,9 @@ class Tensor:
         Returns:
             int: Total number of elements across all dimensions.
         """
-        return int(self._xp.size(self.data))
+        return np.size(self.data)
 
-    @property
-    def array_module(self) -> ArrayModule:
-        """The array library (numpy or cupy) that owns the `data` buffer.
-
-        Returns:
-            ArrayModule: The active array module for this Tensor.
-        """
-        return self._xp
-
-    def astype(self, dtype: TensorDType) -> Tensor:
+    def astype(self, dtype: npt.DTypeLike) -> Tensor:
         """Return a copy of this Tensor cast to `dtype`.
 
         If `dtype` already matches, the original Tensor is returned as-is
@@ -211,13 +199,13 @@ class Tensor:
         subsequent backward pass.
 
         Args:
-            dtype (TensorDType): The target dtype.
+            dtype (npt.DTypeLike): The target dtype.
 
         Returns:
             Tensor: A Tensor with the requested dtype. Returns `self` if the
                 dtype is already correct.
         """
-        return _ops_mod.astype(self, dtype=dtype)
+        return ops.astype(self, dtype=dtype)
 
     def is_leaf(self) -> bool:
         """Whether this Tensor is a leaf in a computation graph.
@@ -246,7 +234,7 @@ class Tensor:
         Returns:
             Tensor: A tensor with the same data, now on `device`.
         """
-        return _ops_mod.copy_to_device(self, device=device)
+        return ops.copy_to_device(self, device=device)
 
     def detach(
         self,
@@ -329,442 +317,6 @@ class Tensor:
         """
         return self.data.item()
 
-    # ------------------------------------------------------------------
-    # Arithmetic dunder methods
-    # ------------------------------------------------------------------
-
-    def __add__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise addition (self + other).
-
-        Args:
-            other (Tensor | NDArrayLike): Right-hand operand.
-
-        Returns:
-            Tensor: Element-wise self + other.
-        """
-        return _ops_mod.add(self, other)
-
-    def __radd__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise addition with reflected operands (other + self).
-
-        Args:
-            other (Tensor | NDArrayLike): Left-hand operand.
-
-        Returns:
-            Tensor: Element-wise other + self.
-        """
-        return _ops_mod.add(other, self)
-
-    def __sub__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise subtraction (self - other).
-
-        Args:
-            other (Tensor | NDArrayLike): Right-hand operand.
-
-        Returns:
-            Tensor: Element-wise self - other.
-        """
-        return _ops_mod.subtract(self, other)
-
-    def __rsub__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise subtraction with reflected operands (other - self).
-
-        Args:
-            other (Tensor | NDArrayLike): Left-hand operand.
-
-        Returns:
-            Tensor: Element-wise other - self.
-        """
-        return _ops_mod.subtract(other, self)
-
-    def __mul__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise multiplication (self * other).
-
-        Args:
-            other (Tensor | NDArrayLike): Right-hand operand.
-
-        Returns:
-            Tensor: Element-wise self * other.
-        """
-        return _ops_mod.multiply(self, other)
-
-    def __rmul__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise multiplication with reflected operands (other * self).
-
-        Args:
-            other (Tensor | NDArrayLike): Left-hand operand.
-
-        Returns:
-            Tensor: Element-wise other * self.
-        """
-        return _ops_mod.multiply(other, self)
-
-    def __truediv__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise division (self / other).
-
-        Args:
-            other (Tensor | NDArrayLike): Divisor.
-
-        Returns:
-            Tensor: Element-wise self / other.
-        """
-        return _ops_mod.divide(self, other)
-
-    def __rtruediv__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise division with reflected operands (other / self).
-
-        Args:
-            other (Tensor | NDArrayLike): Dividend.
-
-        Returns:
-            Tensor: Element-wise other / self.
-        """
-        return _ops_mod.divide(other, self)
-
-    def __pow__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise exponentiation (self ** other).
-
-        Args:
-            other (Tensor | NDArrayLike): Exponent.
-
-        Returns:
-            Tensor: Element-wise self ** other.
-        """
-        return _ops_mod.power(self, other)
-
-    def __rpow__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise exponentiation with reflected operands (other ** self).
-
-        Args:
-            other (Tensor | NDArrayLike): Base.
-
-        Returns:
-            Tensor: Element-wise other ** self.
-        """
-        return _ops_mod.power(other, self)
-
-    def __matmul__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Matrix multiplication (self @ other).
-
-        Args:
-            other (Tensor | NDArrayLike): Right-hand matrix or batch of matrices.
-
-        Returns:
-            Tensor: Result of self @ other.
-        """
-        return _ops_mod.matmul(self, other)
-
-    def __rmatmul__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Matrix multiplication with reflected operands (other @ self).
-
-        Args:
-            other (Tensor | NDArrayLike): Left-hand matrix or batch of matrices.
-
-        Returns:
-            Tensor: Result of other @ self.
-        """
-        return _ops_mod.matmul(other, self)
-
-    def __neg__(self) -> Tensor:
-        """Element-wise numerical negative (-self).
-
-        Returns:
-            Tensor: Element-wise -self.
-        """
-        return _ops_mod.negative(self)
-
-    def __abs__(self) -> Tensor:
-        """Element-wise absolute value (|self|).
-
-        Returns:
-            Tensor: Element-wise |self|.
-        """
-        return _ops_mod.absolute(self)
-
-    # ------------------------------------------------------------------
-    # Reduction methods
-    # ------------------------------------------------------------------
-
-    def sum(
-        self,
-        *,
-        axis: int | tuple[int, ...] | list[int] | None = None,
-        keepdims: bool = False,
-    ) -> Tensor:
-        """Sum of elements along a given axis.
-
-        Args:
-            axis (int | tuple[int, ...] | list[int] | None, optional): Axis or axes to
-                reduce. If None, all elements are summed. Defaults to None.
-            keepdims (bool, optional): Whether to keep reduced dimensions as size-1.
-                Defaults to False.
-
-        Returns:
-            Tensor: Sum of elements along the specified axis.
-        """
-        return _ops_mod.sum(self, axis=axis, keepdims=keepdims)
-
-    def mean(
-        self,
-        *,
-        axis: int | tuple[int, ...] | list[int] | None = None,
-        keepdims: bool = False,
-    ) -> Tensor:
-        """Arithmetic mean along a given axis.
-
-        Args:
-            axis (int | tuple[int, ...] | list[int] | None, optional): Axis or axes to
-                reduce. If None, the mean of all elements is computed. Defaults to None.
-            keepdims (bool, optional): Whether to keep reduced dimensions as size-1.
-                Defaults to False.
-
-        Returns:
-            Tensor: Mean of elements along the specified axis.
-        """
-        return _ops_mod.mean(self, axis=axis, keepdims=keepdims)
-
-    def max(
-        self,
-        *,
-        axis: int | tuple[int, ...] | list[int] | None = None,
-        keepdims: bool = False,
-    ) -> Tensor:
-        """Maximum along a given axis.
-
-        Args:
-            axis (int | tuple[int, ...] | list[int] | None, optional): Axis or axes to
-                reduce. If None, the maximum over all elements is returned.
-                Defaults to None.
-            keepdims (bool, optional): Whether to keep reduced dimensions as size-1.
-                Defaults to False.
-
-        Returns:
-            Tensor: Maximum value along the specified axis.
-        """
-        return _ops_mod.max(self, axis=axis, keepdims=keepdims)
-
-    def min(
-        self,
-        *,
-        axis: int | tuple[int, ...] | list[int] | None = None,
-        keepdims: bool = False,
-    ) -> Tensor:
-        """Minimum along a given axis.
-
-        Args:
-            axis (int | tuple[int, ...] | list[int] | None, optional): Axis or axes to
-                reduce. If None, the minimum over all elements is returned.
-                Defaults to None.
-            keepdims (bool, optional): Whether to keep reduced dimensions as size-1.
-                Defaults to False.
-
-        Returns:
-            Tensor: Minimum value along the specified axis.
-        """
-        return _ops_mod.min(self, axis=axis, keepdims=keepdims)
-
-    def argmax(
-        self,
-        *,
-        axis: int | tuple[int, ...] | list[int] | None = None,
-        keepdims: bool = False,
-    ) -> Tensor:
-        """Indices of the maximum values along a given axis.
-
-        Args:
-            axis (int | tuple[int, ...] | list[int] | None, optional): Axis along which
-                to find the maximum. If None, operates on the flattened array.
-                Defaults to None.
-            keepdims (bool, optional): Whether to keep reduced dimensions as size-1.
-                Defaults to False.
-
-        Returns:
-            Tensor: Integer indices of the maximum values (requires_grad=False).
-        """
-        return _ops_mod.argmax(self, axis=axis, keepdims=keepdims)
-
-    def argmin(
-        self,
-        *,
-        axis: int | tuple[int, ...] | list[int] | None = None,
-        keepdims: bool = False,
-    ) -> Tensor:
-        """Indices of the minimum values along a given axis.
-
-        Args:
-            axis (int | tuple[int, ...] | list[int] | None, optional): Axis along which
-                to find the minimum. If None, operates on the flattened array.
-                Defaults to None.
-            keepdims (bool, optional): Whether to keep reduced dimensions as size-1.
-                Defaults to False.
-
-        Returns:
-            Tensor: Integer indices of the minimum values (requires_grad=False).
-        """
-        return _ops_mod.argmin(self, axis=axis, keepdims=keepdims)
-
-    # ------------------------------------------------------------------
-    # Unary / element-wise methods
-    # ------------------------------------------------------------------
-
-    def sqrt(self) -> Tensor:
-        """Element-wise square root.
-
-        Returns:
-            Tensor: Element-wise sqrt(x).
-        """
-        return _ops_mod.sqrt(self)
-
-    def square(self) -> Tensor:
-        """Element-wise square.
-
-        Returns:
-            Tensor: Element-wise x ** 2.
-        """
-        return _ops_mod.square(self)
-
-    def exp(self) -> Tensor:
-        """Element-wise natural exponential.
-
-        Returns:
-            Tensor: Element-wise e ** x.
-        """
-        return _ops_mod.exp(self)
-
-    def log(self) -> Tensor:
-        """Element-wise natural logarithm.
-
-        Returns:
-            Tensor: Element-wise ln(x).
-        """
-        return _ops_mod.log(self)
-
-    def sin(self) -> Tensor:
-        """Element-wise sine.
-
-        Returns:
-            Tensor: Element-wise sin(x), where x is in radians.
-        """
-        return _ops_mod.sin(self)
-
-    def cos(self) -> Tensor:
-        """Element-wise cosine.
-
-        Returns:
-            Tensor: Element-wise cos(x), where x is in radians.
-        """
-        return _ops_mod.cos(self)
-
-    # ------------------------------------------------------------------
-    # Shape methods
-    # ------------------------------------------------------------------
-
-    def reshape(self, shape: tuple[int, ...]) -> Tensor:
-        """Reshape the tensor to the given shape.
-
-        Args:
-            shape (tuple[int, ...]): Target shape. Must be compatible with the total
-                number of elements in this Tensor.
-
-        Returns:
-            Tensor: Tensor with the same data viewed under the new shape.
-        """
-        return _ops_mod.reshape(self, shape=shape)
-
-    # ------------------------------------------------------------------
-    # Comparison dunder methods (not differentiable, return bool tensors)
-    # ------------------------------------------------------------------
-
-    def __eq__(self, other: object) -> Tensor:  # type: ignore[override]
-        """Element-wise equality check (self == other).
-
-        Args:
-            other (object): Value to compare against. Must be on the same device
-                if it is a Tensor or NDArray.
-
-        Returns:
-            Tensor: Boolean tensor, True where elements are equal (requires_grad=False).
-        """
-        _ensure_comparable(self, other)
-        if isinstance(other, Tensor):
-            return Tensor(self._xp.asarray(self.data == other.data), requires_grad=False)
-        return Tensor(self._xp.asarray(self.data == other), requires_grad=False)
-
-    def __ne__(self, other: object) -> Tensor:  # type: ignore[override]
-        """Element-wise inequality check (self != other).
-
-        Args:
-            other (object): Value to compare against. Must be on the same device
-                if it is a Tensor or NDArray.
-
-        Returns:
-            Tensor: Boolean tensor, True where elements differ (requires_grad=False).
-        """
-        _ensure_comparable(self, other)
-        if isinstance(other, Tensor):
-            return Tensor(self._xp.asarray(self.data != other.data), requires_grad=False)
-        return Tensor(self._xp.asarray(self.data != other), requires_grad=False)
-
-    def __lt__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise less-than check (self < other).
-
-        Args:
-            other (Tensor | NDArrayLike): Right-hand operand. Must be on the same device.
-
-        Returns:
-            Tensor: Boolean tensor, True where self < other (requires_grad=False).
-        """
-        _ensure_comparable(self, other)
-        if isinstance(other, Tensor):
-            return Tensor(self._xp.asarray(self.data < other.data), requires_grad=False)
-        return Tensor(self._xp.asarray(self.data < other), requires_grad=False)
-
-    def __le__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise less-than-or-equal check (self <= other).
-
-        Args:
-            other (Tensor | NDArrayLike): Right-hand operand. Must be on the same device.
-
-        Returns:
-            Tensor: Boolean tensor, True where self <= other (requires_grad=False).
-        """
-        _ensure_comparable(self, other)
-        if isinstance(other, Tensor):
-            return Tensor(self._xp.asarray(self.data <= other.data), requires_grad=False)
-        return Tensor(self._xp.asarray(self.data <= other), requires_grad=False)
-
-    def __gt__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise greater-than check (self > other).
-
-        Args:
-            other (Tensor | NDArrayLike): Right-hand operand. Must be on the same device.
-
-        Returns:
-            Tensor: Boolean tensor, True where self > other (requires_grad=False).
-        """
-        _ensure_comparable(self, other)
-        if isinstance(other, Tensor):
-            return Tensor(self._xp.asarray(self.data > other.data), requires_grad=False)
-        return Tensor(self._xp.asarray(self.data > other), requires_grad=False)
-
-    def __ge__(self, other: Tensor | NDArrayLike) -> Tensor:
-        """Element-wise greater-than-or-equal check (self >= other).
-
-        Args:
-            other (Tensor | NDArrayLike): Right-hand operand. Must be on the same device.
-
-        Returns:
-            Tensor: Boolean tensor, True where self >= other (requires_grad=False).
-        """
-        _ensure_comparable(self, other)
-        if isinstance(other, Tensor):
-            return Tensor(self._xp.asarray(self.data >= other.data), requires_grad=False)
-        return Tensor(self._xp.asarray(self.data >= other), requires_grad=False)
-
-    # ------------------------------------------------------------------
-    # Shape / utility dunder methods
-    # ------------------------------------------------------------------
-
     def __len__(self) -> int:
         """Length of the first dimension.
 
@@ -773,7 +325,7 @@ class Tensor:
         """
         return self.shape[0]
 
-    def __getitem__(self, key: Any) -> Tensor:
+    def __getitem__(self, key: Any) -> Any:
         """Index into the tensor.
 
         Args:
@@ -781,10 +333,15 @@ class Tensor:
                 Tensor indices are automatically unwrapped to their underlying arrays.
 
         Returns:
-            Tensor: The selected sub-tensor (requires_grad=False).
+            Any: The selected sub-data. If not a scalar, a Tensor with `required_grad=False`
+                is returned, as index access is non-differentiable.
         """
         result = self.data[_unwrap_tensor_index(key)]
-        return Tensor(self._xp.asarray(result))
+
+        if not is_ndarray(result):
+            return result
+
+        return Tensor(result)
 
     def __setitem__(self, key: Any, value: Tensor | NDArrayLike) -> None:
         """Set values in the tensor by index.
@@ -808,7 +365,7 @@ class Tensor:
         """Human-readable string representation of the tensor data.
 
         Returns:
-            str: String of the form ``Tensor(<data>)``.
+            str: String of the form `Tensor(<data>)`.
         """
         class_name = self.__class__.__name__
         prefix = f"{class_name}("
@@ -823,7 +380,7 @@ class Tensor:
 
         Returns:
             str: String of the form
-                ``Tensor(<data>, dtype=..., device='...', requires_grad=...)``.
+                `Tensor(<data>, dtype=..., device='...', requires_grad=...)`.
         """
         class_name = self.__class__.__name__
         prefix = f"{class_name}("
@@ -868,13 +425,14 @@ class Parameter(Tensor):
         if isinstance(data, Tensor):
             data = data.data
 
+        if np.issubdtype(data.dtype, np.integer):
+            raise ValueError("Parameter must have float type, found int.")
+
         super().__init__(
             data,
             requires_grad=True,
             keep_grad=True,
         )
-        if self.dtype.is_integer:
-            raise ValueError("Parameter must have float type, found int.")
         self.is_training = is_training
 
     def copy_to_device(self, device: TensorDevice) -> Parameter:
@@ -905,7 +463,7 @@ def tensor(
     data: Tensor | NDArrayLike,
     *,
     device: DeviceLike | None = None,
-    dtype: TensorDType | None = None,
+    dtype: npt.DTypeLike | None = None,
     requires_grad: bool = False,
     keep_grad: bool = False,
 ) -> Tensor:
@@ -919,7 +477,7 @@ def tensor(
             If Tensor, this function acts as a copy operation (without grad tracking).
         device (TensorDevice | None, optional): The device on which the Tensor
             should be created. Defaults to None, which infers TensorDevice("cpu").
-        dtype (TensorDType | None, optional): The data type of the array data.
+        dtype (npt.DTypeLike | None, optional): The data type of the array data.
             Defaults to None, meaning dtype is inferred from data.
         requires_grad (bool, optional): Whether to track gradients. Defaults to False.
         keep_grad (bool, optional): Whether to retain gradients after backward. Defaults to False.
@@ -946,7 +504,7 @@ def tensor(
 def ones(
     shape: tuple[int, ...],
     *,
-    dtype: TensorDType | None = None,
+    dtype: npt.DTypeLike | None = None,
     device: DeviceLike | None = None,
     requires_grad: bool = False,
 ) -> Tensor:
@@ -954,7 +512,7 @@ def ones(
 
     Args:
         shape (tuple[int, ...]): Shape of the resulting Tensor.
-        dtype (TensorDType | None, optional): Data type. If None, will be Float32. Defaults to None.
+        dtype (npt.DTypeLike | None, optional): Data type. If None, will be np.float32. Defaults to None.
         device (DeviceLike | None, optional): Target device. If None, will be CPU. Defaults to None.
         requires_grad (bool, optional): Whether to track gradients. Defaults to False.
 
@@ -963,7 +521,7 @@ def ones(
     """
     return tensor(
         np.ones(shape),
-        dtype=dtype or Float32(),
+        dtype=dtype or np.float32,
         device=device,
         requires_grad=requires_grad,
     )
@@ -972,7 +530,7 @@ def ones(
 def zeros(
     shape: tuple[int, ...],
     *,
-    dtype: TensorDType | None = None,
+    dtype: npt.DTypeLike | None = None,
     device: DeviceLike | None = None,
     requires_grad: bool = False,
 ) -> Tensor:
@@ -980,7 +538,7 @@ def zeros(
 
     Args:
         shape (tuple[int, ...]): Shape of the resulting Tensor.
-        dtype (TensorDType | None, optional): Data type. If None, will be Float32. Defaults to None.
+        dtype (npt.DTypeLike | None, optional): Data type. If None, will be np.float32. Defaults to None.
         device (DeviceLike | None, optional): Target device. If None, will be CPU. Defaults to None.
         requires_grad (bool, optional): Whether to track gradients. Defaults to False.
 
@@ -989,7 +547,7 @@ def zeros(
     """
     return tensor(
         np.zeros(shape),
-        dtype=dtype or Float32(),
+        dtype=dtype or np.float32,
         device=device,
         requires_grad=requires_grad,
     )
@@ -999,7 +557,7 @@ def eye(
     n: int,
     m: int | None = None,
     *,
-    dtype: TensorDType | None = None,
+    dtype: npt.DTypeLike | None = None,
     device: DeviceLike | None = None,
     requires_grad: bool = False,
 ) -> Tensor:
@@ -1009,7 +567,7 @@ def eye(
         n (int): Number of rows.
         m (int | None, optional): Number of columns. If None, uses `n`.
             Defaults to None.
-        dtype (TensorDType | None, optional): Data type. If None, will be Float32.
+        dtype (npt.DTypeLike | None, optional): Data type. If None, will be np.float32.
             Defaults to None.
         device (DeviceLike | None, optional): Target device. If None, will be CPU.
             Defaults to None.
@@ -1020,7 +578,7 @@ def eye(
     """
     return tensor(
         np.eye(n, m),
-        dtype=dtype or Float32(),
+        dtype=dtype or np.float32,
         device=device,
         requires_grad=requires_grad,
     )
@@ -1029,14 +587,14 @@ def eye(
 def ones_like(
     other: Tensor,
     *,
-    dtype: TensorDType | None = None,
+    dtype: npt.DTypeLike | None = None,
     requires_grad: bool = False,
 ) -> Tensor:
     """Create a Tensor of ones matching the shape and device of `other`.
 
     Args:
         other (Tensor): Reference tensor for shape and device.
-        dtype (TensorDType | None, optional): Override dtype. If None, dtype will
+        dtype (npt.DTypeLike | None, optional): Override dtype. If None, dtype will
             be determined from `other`. Defaults to None.
         requires_grad (bool, optional): Whether to track gradients. Defaults to False.
 
@@ -1054,14 +612,14 @@ def ones_like(
 def zeros_like(
     other: Tensor,
     *,
-    dtype: TensorDType | None = None,
+    dtype: npt.DTypeLike | None = None,
     requires_grad: bool = False,
 ) -> Tensor:
     """Create a Tensor of zeros matching the shape and device of `other`.
 
     Args:
         other (Tensor): Reference tensor for shape and device.
-        dtype (TensorDType | None, optional): Override dtype. If None, dtype will
+        dtype (npt.DTypeLike | None, optional): Override dtype. If None, dtype will
             be determined from `other`. Defaults to None.
         requires_grad (bool, optional): Whether to track gradients. Defaults to False.
 

@@ -7,15 +7,187 @@ from __future__ import annotations
 
 import math
 from collections.abc import Callable
+from dataclasses import dataclass
+from enum import Enum
 from typing import Any, Literal, cast
 
 import numpy as np
 
-from .backend import NDArray, TensorDevice, copy_array, get_array_module
+from .backend import NDArray, TensorDevice, copy_array
 
 # Type alias for gradient operations.
 # Gradients are raw numerical buffers without computation graph overhead.
 GradOp = Callable[..., tuple[NDArray | None, ...]]
+
+
+class OpType(Enum):
+    """Operation category by computational behavior.
+
+    Inspired by tinygrad's op categorization.
+    """
+
+    ELEMENTWISE = "elementwise"  # Point-wise: add, mul, sin, etc.
+    REDUCTION = "reduction"  # Dimension reduction: sum, mean, max, etc.
+    MOVEMENT = "movement"  # Data movement: copy_to_device, reshape, etc.
+    LINALG = "linalg"  # Linear algebra: matmul, etc.
+
+
+class OpInputs(Enum):
+    """Number of tensor inputs to an operation.
+
+    The enum value equals the input count, e.g. `OpInputs.BINARY.value == 2`.
+    """
+
+    UNARY = 1
+    BINARY = 2
+    TERNARY = 3
+
+
+@dataclass(frozen=True)
+class GradOpSpec:
+    """Specification for a gradient operation.
+
+    Attributes:
+        backward_fn (GradOp): The gradient computation function.
+        op_type (OpType): Operation category (elementwise, reduction, etc.).
+        op_inputs (OpInputs): Number of inputs (unary, binary, ternary).
+        forward_names (tuple[str, ...]): Forward op names mapping to this backward.
+            First name is canonical, others are aliases.
+        constraints (dict[str, str] | None): Input constraints for testing.
+            Maps input name to constraint type, e.g. ``{"x": "positive"}``.
+        skip_test (bool): Whether to skip automated finite difference testing.
+        skip_reason (str | None): Reason for skipping. Required if skip_test=True.
+    """
+
+    backward_fn: GradOp
+    op_type: OpType
+    op_inputs: OpInputs
+    forward_names: tuple[str, ...]
+    constraints: dict[str, str] | None = None
+    skip_test: bool = False
+    skip_reason: str | None = None
+
+    def __post_init__(self) -> None:
+        """Validate that skip_reason is provided when skip_test is True.
+
+        Raises:
+            ValueError: If skip_test is True but skip_reason is None or empty.
+        """
+        if self.skip_test and not self.skip_reason:
+            raise ValueError("skip_reason is required when skip_test=True")
+
+
+# The registry maps forward op names to their gradient specifications
+_GRAD_OPS_REGISTRY: dict[str, GradOpSpec] = {}
+
+
+def register_grad_op(
+    *,
+    op_type: OpType,
+    op_inputs: OpInputs,
+    forward_names: tuple[str, ...] | None = None,
+    constraints: dict[str, str] | None = None,
+    skip_test: bool = False,
+    skip_reason: str | None = None,
+) -> Callable[[GradOp], GradOp]:
+    """Decorator factory to register a gradient operation with metadata.
+
+    The decorated function should follow the naming convention ``<operation>_backward``.
+    It will be registered under all provided forward_names, or under the operation
+    name extracted from the function name if forward_names is None.
+
+    Args:
+        op_type (OpType): Operation category (elementwise, reduction, etc.).
+        op_inputs (OpInputs): Number of tensor inputs (unary, binary, ternary).
+        forward_names (tuple[str, ...] | None): Forward op names to register under.
+            If None, extracted from function name.
+        constraints (dict[str, str] | None): Input constraints for testing.
+        skip_test (bool): Whether to skip automated finite difference testing.
+        skip_reason (str | None): Reason for skipping. Required if skip_test=True.
+
+    Returns:
+        Callable[[GradOp], GradOp]: Decorator that registers the grad op.
+
+    Raises:
+        ValueError: If skip_test=True but skip_reason is not provided.
+    """
+    if skip_test and not skip_reason:
+        raise ValueError("skip_reason is required when skip_test=True")
+
+    def decorator(func: GradOp) -> GradOp:
+        canonical_name = func.__name__.rsplit("_", maxsplit=1)[0]
+        names = forward_names if forward_names is not None else (canonical_name,)
+
+        spec = GradOpSpec(
+            backward_fn=func,
+            op_type=op_type,
+            op_inputs=op_inputs,
+            forward_names=names,
+            constraints=constraints,
+            skip_test=skip_test,
+            skip_reason=skip_reason,
+        )
+
+        for name in names:
+            _GRAD_OPS_REGISTRY[name] = spec
+
+        return func
+
+    return decorator
+
+
+def normalize_grad_op_name(*, name: str, is_reduce: bool = False) -> str:
+    """Normalize operation name for registry lookup.
+
+    Handles the special case where "add" with is_reduce=True maps to "sum".
+
+    Args:
+        name (str): The operation name.
+        is_reduce (bool): Whether the operation is a reduction.
+
+    Returns:
+        str: The normalized operation name.
+
+    Examples:
+        >>> normalize_grad_op_name(name="power")
+        "power"
+        >>> normalize_grad_op_name(name="add", is_reduce=True)
+        "sum"
+        >>> normalize_grad_op_name(name="add", is_reduce=False)
+        "add"
+    """
+    if name == "add" and is_reduce:
+        return "sum"
+    if name == "maximum" and is_reduce:
+        return "max"  # "maximum" is element-wise maximum, "max" is the reduction
+    if name == "minimum" and is_reduce:
+        return "min"  # "minimum" is element-wise minimum, "min" is the reduction
+    return name
+
+
+def get_grad_op(name: str) -> GradOp | None:
+    """Get the backward function for a forward operation.
+
+    Args:
+        name (str): Forward operation name (e.g. "add", "matmul").
+
+    Returns:
+        GradOp | None: The gradient function, or None if not found.
+    """
+    spec = _GRAD_OPS_REGISTRY.get(normalize_grad_op_name(name=name))
+    return spec.backward_fn if spec is not None else None
+
+
+def get_grad_op_spec(name: str) -> GradOpSpec | None:
+    """Get the full specification for a gradient operation.
+
+    Args:
+        name (str): Forward operation name.
+
+    Returns:
+        GradOpSpec | None: The full specification, or None if not found.
+    """
+    return _GRAD_OPS_REGISTRY.get(normalize_grad_op_name(name=name))
 
 
 def _broadcast_backward(
@@ -37,8 +209,6 @@ def _broadcast_backward(
     if x.shape == grad_out.shape:
         return grad_out  # shapes are the same, no broadcast happened
 
-    xp = get_array_module(grad_out)
-
     collapse_dim: list[int] = []
     for i in range(max(x.ndim, grad_out.ndim)):
         idx_x = x.ndim - i - 1
@@ -46,7 +216,7 @@ def _broadcast_backward(
         if idx_x < 0 or x.shape[idx_x] < grad_out.shape[idx_grad_out]:
             collapse_dim.append(idx_grad_out)
 
-    return xp.sum(grad_out, axis=tuple(collapse_dim), keepdims=True).reshape(x.shape)
+    return np.sum(grad_out, axis=tuple(collapse_dim), keepdims=True).reshape(x.shape)
 
 
 def broadcastable(
@@ -92,6 +262,11 @@ def broadcastable(
     return wrapper
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+    forward_names=("absolute", "abs"),
+)
 def absolute_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -109,12 +284,15 @@ def absolute_backward(
     Returns:
         tuple[NDArray | None]: Gradient for `x`, or `None` if skipped.
     """
-    xp = get_array_module(grad_out)
     x = inputs[0]
-    x_grad = xp.sign(x) * grad_out if compute_grad[0] else None
+    x_grad = np.sign(x) * grad_out if compute_grad[0] else None
     return (x_grad,)
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def negative_backward(
     *inputs: NDArray,  # noqa: ARG001
     compute_grad: tuple[bool],
@@ -136,6 +314,10 @@ def negative_backward(
     return (x_grad,)
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+)
 @broadcastable
 def add_backward(
     *inputs: NDArray,  # noqa: ARG001
@@ -163,6 +345,10 @@ def add_backward(
 # -> "x - y = x + (-y) = z", so we could chain the
 #   "negative" and "add" backward functions, but a single
 #   "substract" function is more efficient
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+)
 @broadcastable
 def subtract_backward(
     *inputs: NDArray,  # noqa: ARG001
@@ -186,6 +372,11 @@ def subtract_backward(
     return x_grad, y_grad
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    forward_names=("mul", "multiply"),
+)
 @broadcastable
 def mul_backward(
     *inputs: NDArray,
@@ -211,6 +402,12 @@ def mul_backward(
     return grad_x, grad_y
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    forward_names=("div", "divide"),
+    constraints={"y": "positive"},  # avoid division by zero
+)
 @broadcastable
 def div_backward(
     *inputs: NDArray,
@@ -236,6 +433,10 @@ def div_backward(
     return grad_x, grad_y
 
 
+@register_grad_op(
+    op_type=OpType.LINALG,
+    op_inputs=OpInputs.BINARY,
+)
 def matmul_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool, bool],
@@ -258,13 +459,17 @@ def matmul_backward(
         tuple[NDArray | None, NDArray | None]: Gradients for `(A, B)`, with
             `None` where `compute_grad[i]` is False.
     """
-    xp = get_array_module(grad_out)
     A, B = inputs  # noqa: N806 -> variables are uppercase to better show that they are matrices
-    grad_x = xp.matmul(grad_out, xp.swapaxes(B, -2, -1)) if compute_grad[0] else None
-    grad_y = xp.matmul(xp.swapaxes(A, -2, -1), grad_out) if compute_grad[1] else None
+    grad_x = np.matmul(grad_out, np.swapaxes(B, -2, -1)) if compute_grad[0] else None
+    grad_y = np.matmul(np.swapaxes(A, -2, -1), grad_out) if compute_grad[1] else None
     return grad_x, grad_y
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+    constraints={"x": "positive"},
+)
 def sqrt_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -282,12 +487,16 @@ def sqrt_backward(
     Returns:
         tuple[NDArray | None]: Gradient for `x`, or `None` if skipped.
     """
-    xp = get_array_module(grad_out)
     x = inputs[0]
-    grad_x = grad_out / (2 * xp.sqrt(x)) if compute_grad[0] else None
+    grad_x = grad_out / (2 * np.sqrt(x)) if compute_grad[0] else None
     return (grad_x,)
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    constraints={"x": "positive"},  # avoid complex numbers with non-integer exponents
+)
 @broadcastable
 def power_backward(
     *inputs: NDArray,
@@ -307,13 +516,16 @@ def power_backward(
         tuple[NDArray | None, NDArray | None]: Gradients for `(x, y)`, with
             `None` where `compute_grad[i]` is False.
     """
-    xp = get_array_module(grad_out)
     x, y = inputs
-    grad_x = y * xp.pow(x, y - 1) * grad_out if compute_grad[0] else None
-    grad_y = xp.pow(x, y) * xp.log(x) * grad_out if compute_grad[1] else None
+    grad_x = y * np.pow(x, y - 1) * grad_out if compute_grad[0] else None
+    grad_y = np.pow(x, y) * np.log(x) * grad_out if compute_grad[1] else None
     return grad_x, grad_y
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def square_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -336,6 +548,10 @@ def square_backward(
     return (grad_x,)
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def exp_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -353,12 +569,16 @@ def exp_backward(
     Returns:
         tuple[NDArray | None]: Gradient for `x`, or `None` if skipped.
     """
-    xp = get_array_module(grad_out)
     x = inputs[0]
-    grad_x = grad_out * xp.exp(x) if compute_grad[0] else None
+    grad_x = grad_out * np.exp(x) if compute_grad[0] else None
     return (grad_x,)
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+    constraints={"x": "positive"},
+)
 def log_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -381,6 +601,10 @@ def log_backward(
     return (grad_x,)
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def sin_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -398,12 +622,15 @@ def sin_backward(
     Returns:
         tuple[NDArray | None]: Gradient for `x`, or `None` if skipped.
     """
-    xp = get_array_module(grad_out)
     x = inputs[0]
-    grad_x = xp.cos(x) * grad_out if compute_grad[0] else None
+    grad_x = np.cos(x) * grad_out if compute_grad[0] else None
     return (grad_x,)
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.UNARY,
+)
 def cos_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -421,12 +648,15 @@ def cos_backward(
     Returns:
         tuple[NDArray | None]: Gradient for `x`, or `None` if skipped.
     """
-    xp = get_array_module(grad_out)
     x = inputs[0]
-    grad_x = -xp.sin(x) * grad_out if compute_grad[0] else None
+    grad_x = -np.sin(x) * grad_out if compute_grad[0] else None
     return (grad_x,)
 
 
+@register_grad_op(
+    op_type=OpType.REDUCTION,
+    op_inputs=OpInputs.UNARY,
+)
 def sum_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -453,17 +683,20 @@ def sum_backward(
     grad_x: NDArray | None = None
 
     if compute_grad[0]:
-        xp = get_array_module(grad_out)
         axis = make_axis(ndim=x.ndim, kwargs_dict=kwargs)
 
         if not kwargs.get("keepdims", False):
-            grad_out = xp.expand_dims(grad_out, axis=axis)
+            grad_out = np.expand_dims(grad_out, axis=axis)
 
-        grad_x = xp.broadcast_to(grad_out, shape=x.shape)
+        grad_x = np.broadcast_to(grad_out, shape=x.shape)
 
     return (grad_x,)
 
 
+@register_grad_op(
+    op_type=OpType.REDUCTION,
+    op_inputs=OpInputs.UNARY,
+)
 def mean_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -490,13 +723,12 @@ def mean_backward(
     grad_x: NDArray | None = None
 
     if compute_grad[0]:
-        xp = get_array_module(grad_out)
         axis = make_axis(ndim=x.ndim, kwargs_dict=kwargs)
 
         if not kwargs.get("keepdims", False):
-            grad_out = xp.expand_dims(grad_out, axis=axis)
+            grad_out = np.expand_dims(grad_out, axis=axis)
 
-        grad_x = xp.broadcast_to(grad_out, shape=x.shape)
+        grad_x = np.broadcast_to(grad_out, shape=x.shape)
 
         n_reduced_elem = math.prod(x.shape[a] for a in axis)
 
@@ -538,7 +770,6 @@ def _extremum_backward(
     Returns:
         tuple[NDArray]: The computed gradient with respect to `x`.
     """
-    xp = get_array_module(grad_out)
     x = inputs[0]
 
     x_mask = kwargs.get("x_mask")
@@ -553,15 +784,15 @@ def _extremum_backward(
     axis = make_axis(ndim=x.ndim, kwargs_dict=kwargs)
 
     if not kwargs.get("keepdims", False):
-        grad_out = xp.expand_dims(grad_out, axis=axis)
+        grad_out = np.expand_dims(grad_out, axis=axis)
 
-    grad_out = xp.broadcast_to(grad_out, shape=x.shape)
+    grad_out = np.broadcast_to(grad_out, shape=x.shape)
 
-    count = xp.sum(x_mask, axis=axis, keepdims=True)
-    if not xp.all(count > 0):
+    count = np.sum(x_mask, axis=axis, keepdims=True)
+    if not np.all(count > 0):
         raise ValueError(f'There must be at least one {op_type} along the reduced axis "{axis}"')
 
-    grad_x = xp.where(x_mask, grad_out / count, 0)
+    grad_x = np.where(x_mask, grad_out / count, 0)
     # Scale the gradient by the inverse of the number of extremas there were
     #   along the reduced axes.
     # If one axis had 3 extremas, then the gradient is divided between them
@@ -570,6 +801,12 @@ def _extremum_backward(
     return (grad_x,)
 
 
+@register_grad_op(
+    op_type=OpType.REDUCTION,
+    op_inputs=OpInputs.UNARY,
+    skip_test=True,
+    skip_reason="requires x_mask computed during forward pass",
+)
 def max_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -610,6 +847,12 @@ def max_backward(
     )
 
 
+@register_grad_op(
+    op_type=OpType.REDUCTION,
+    op_inputs=OpInputs.UNARY,
+    skip_test=True,
+    skip_reason="requires x_mask computed during forward pass",
+)
 def min_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -686,7 +929,6 @@ def _element_wise_extremum_backward(
         tuple[NDArray | None, NDArray | None]: Gradients for `(x, y)`, with
             `None` where `compute_grad[i]` is False.
     """
-    xp = get_array_module(grad_out)
     x = inputs[0]
     y = inputs[1]
 
@@ -712,16 +954,22 @@ def _element_wise_extremum_backward(
     y_grad: NDArray | None = None
 
     if compute_grad[0]:
-        scale_x = xp.where(both_extremum, 0.5, x_mask)
+        scale_x = np.where(both_extremum, 0.5, x_mask)
         x_grad = apply_grad_op * scale_x * grad_out
 
     if compute_grad[1]:
-        scale_y = xp.where(both_extremum, 0.5, 1 - x_mask)
+        scale_y = np.where(both_extremum, 0.5, 1 - x_mask)
         y_grad = apply_grad_op * scale_y * grad_out
 
     return x_grad, y_grad
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    skip_test=True,
+    skip_reason="requires x_mask computed during forward pass",
+)
 @broadcastable
 def maximum_backward(
     *inputs: NDArray,
@@ -760,6 +1008,12 @@ def maximum_backward(
     )
 
 
+@register_grad_op(
+    op_type=OpType.ELEMENTWISE,
+    op_inputs=OpInputs.BINARY,
+    skip_test=True,
+    skip_reason="requires x_mask computed during forward pass",
+)
 @broadcastable
 def minimum_backward(
     *inputs: NDArray,
@@ -798,6 +1052,12 @@ def minimum_backward(
     )
 
 
+@register_grad_op(
+    op_type=OpType.MOVEMENT,
+    op_inputs=OpInputs.UNARY,
+    skip_test=True,
+    skip_reason="not testable with finite differences",
+)
 def copy_to_device_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -827,6 +1087,12 @@ def copy_to_device_backward(
     return (copy_array(array=grad_out, device=src_device),)
 
 
+@register_grad_op(
+    op_type=OpType.MOVEMENT,
+    op_inputs=OpInputs.UNARY,
+    skip_test=True,
+    skip_reason="not testable with finite differences",
+)
 def reshape_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],
@@ -844,12 +1110,17 @@ def reshape_backward(
         tuple[NDArray | None]: Gradient for the array, with
             `None` where `compute_grad[i]` is False.
     """
-    xp = get_array_module(grad_out)
     x = inputs[0]
-    x_grad = xp.reshape(grad_out, shape=x.shape) if compute_grad[0] else None
+    x_grad = np.reshape(grad_out, shape=x.shape) if compute_grad[0] else None
     return (x_grad,)
 
 
+@register_grad_op(
+    op_type=OpType.MOVEMENT,
+    op_inputs=OpInputs.UNARY,
+    skip_test=True,
+    skip_reason="not testable with finite differences",
+)
 def astype_backward(
     *inputs: NDArray,
     compute_grad: tuple[bool],

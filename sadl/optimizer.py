@@ -1,13 +1,16 @@
+"""All optimizers, including the actual backpropagation code."""
+
 import logging
 from abc import ABC, abstractmethod
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, ValuesView
 from itertools import chain
 
+import numpy as np
+
 from .backend import TensorDevice
 from .grad_mode import no_grad, no_grad_fn
-from .ops import sqrt
-from .tensor import Parameter, Tensor, tensor, zeros_like
+from .tensor import Parameter, Tensor, ones_like, tensor, zeros_like
 from .utils import traverse_attrs
 
 logger = logging.getLogger(__name__)
@@ -312,9 +315,8 @@ class Optimizer(ABC):
         # (this is necessary to make "node.grad is None" below well-defined)
         self._clear_activation_gradients(topo_nodes=node_order)
 
-        backend = loss.array_module
-
-        loss.grad = backend.ones_like(loss.data)  # seed gradient for loss
+        # no "np.ones_like" here, because loss.grad needs to be on the same device as "loss"
+        loss.grad = ones_like(loss).data  # seed gradient for loss
 
         with no_grad():
             for node in reversed(node_order):
@@ -359,7 +361,9 @@ class Optimizer(ABC):
                             f"Gradient shape {src_grad.shape} does not match source shape {src.shape}"
                         )
                     current_src_grad = (
-                        src.grad if src.grad is not None else backend.zeros_like(src.data)
+                        src.grad
+                        if src.grad is not None
+                        else zeros_like(src).data  # see "ones_like(loss).data"
                     )
                     src.grad = current_src_grad + src_grad
 
@@ -529,14 +533,14 @@ class Adam(Optimizer):
             self.m[idx] = self.beta_1 * self.m[idx] + (1 - self.beta_1) * param.grad
             self.v[idx] = self.beta_2 * self.v[idx] + (1 - self.beta_2) * param.grad**2
 
-            lr_t = self.lr * sqrt(1 - self.beta_2**self.t) / (1 - self.beta_1**self.t)
+            lr_t = self.lr * np.sqrt(1 - self.beta_2**self.t) / (1 - self.beta_1**self.t)
 
-            epsilon_hat = self.epsilon * sqrt(1 - self.beta_2**self.t)
+            epsilon_hat = self.epsilon * np.sqrt(1 - self.beta_2**self.t)
 
             # [...] -> in-place assignment
             param[...] = (
                 (1 - self.lr * self.weight_decay) * param  # weight decay part
-                - lr_t * self.m[idx] / (sqrt(self.v[idx]) + epsilon_hat)  # gradient part
+                - lr_t * self.m[idx] / (np.sqrt(self.v[idx]) + epsilon_hat)  # gradient part
             )
 
 

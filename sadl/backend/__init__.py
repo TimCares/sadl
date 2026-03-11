@@ -5,6 +5,8 @@ from .array_provider import (
     ArrayModule,
     NDArray,
     NDArrayLike,
+    get_array_module_from_device,
+    is_ndarray,
 )
 from .device import (
     DeviceLike,
@@ -12,16 +14,8 @@ from .device import (
     SupportsCupyDevice,
     TensorDevice,
 )
-from .dtype import (
-    TensorDType,
-)
-from .random import (
-    get_rng,
-)
 from .utils import (
     copy_array,
-    get_array_module,
-    get_array_module_from_device,
 )
 
 __all__ = [
@@ -32,10 +26,8 @@ __all__ = [
     "NDArray",
     "NDArrayLike",
     "SupportsCupyDevice",
-    "TensorDType",
     "TensorDevice",
     "copy_array",
-    "get_array_module",
     "get_array_module_from_device",
-    "get_rng",
+    "is_ndarray",
 ]

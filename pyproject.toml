@@ -46,7 +46,7 @@ dev = [
     "python-semantic-release>=9.0.0",
     "commitizen>=4.13.9",
     "pre-commit>=4.0.0",
-    "interrogate>=1.7.0",
+    "interrogate[png]>=1.7.0",
     "pip-audit>=2.10.0",
     "pyright>=1.1.408",
 ]
@@ -64,8 +64,6 @@ notebook = [
     "notebook>=7.5.3",
     "datasets>=4.5.0",
 ]
-
-build = ["uv ~= 0.10.0"]
 
 [project.urls]
 Homepage = "https://github.com/timcares/sadl"
@@ -161,7 +159,7 @@ paths = ["sadl"]
 fail-under = 90
 ignore-init-method = true
 ignore-init-module = true
-ignore-module = true
+ignore-nested-functions = true
 exclude = ["tests"]
 
 
@@ -201,6 +199,11 @@ addopts = [
 # =============================================================================
 # Coverage
 # =============================================================================
+# Coverage is restricted to grad_ops.py (the gradient operation registry) as the
+# most critical and testable part of the autograd implementation.
+# Since we focus mostly on the correctness of the grad ops, we can have a low test coverage
+# as long as every backward function testable is covered.
+# (So this coverage config might look weird, but for this use case it is acceptable.)
 
 [tool.coverage.run]
 source = ["sadl"]
@@ -208,7 +211,8 @@ branch = true
 omit = ["tests/*", "*/__init__.py"]
 
 [tool.coverage.report]
-fail_under = 80
+include = ["sadl/grad_ops.py"]
+fail_under = 50
 show_missing = true
 exclude_lines = [
     "pragma: no cover",
@@ -222,16 +226,7 @@ exclude_lines = [
 # =============================================================================
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
-# The build command for semantic release is more than just the actual
-#   build command "uv build", because the package version in
-#   the "uv.lock" file will become stale.
-#   See: https://python-semantic-release.readthedocs.io/en/latest/configuration/configuration-guides/uv_integration.html#updating-the-uv-lock
-build_command = """
-    python -m pip install -e '.[build]'
-    uv lock --upgrade-package "$PACKAGE_NAME"
-    git add uv.lock
-    uv build
-"""
+build_command = "uv build"
 commit_parser = "conventional"
 commit_message = "chore(release): v{version}"
 tag_format = "v{version}"

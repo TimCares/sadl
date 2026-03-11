@@ -9,6 +9,17 @@
   Automatic differentiation, neural network primitives, and optimization in ~2000 lines of Python.
 </p>
 
+<p align="center">
+  <a href="https://pypi.org/project/py-sadl/"><img src="https://img.shields.io/pypi/v/py-sadl?style=flat" alt="PyPI version"></a>
+  <a href="https://pypi.org/project/py-sadl/"><img src="https://img.shields.io/pypi/pyversions/py-sadl?style=flat" alt="Python versions"></a>
+  <a href="https://pypi.org/project/py-sadl/"><img src="https://img.shields.io/pypi/l/py-sadl?style=flat" alt="License"></a>
+  <a href="https://github.com/timcares/sadl/actions/workflows/ci_cd.yaml"><img src="https://github.com/timcares/sadl/actions/workflows/ci_cd.yaml/badge.svg" alt="CI"></a>
+  <a href="https://codecov.io/gh/timcares/sadl"><img src="https://codecov.io/gh/timcares/sadl/graph/badge.svg" alt="codecov"></a>
+  <a href="https://docs.astral.sh/ruff/"><img src="https://img.shields.io/badge/ruff-linted-blue?style=flat" alt="Ruff"></a>
+  <a href="https://microsoft.github.io/pyright/"><img src="https://img.shields.io/badge/pyright-type%20checked-blue?style=flat" alt="Pyright"></a>
+  <img alt="Docstring coverage" src="assets/interrogate_badge.png" height="22">
+</p>
+
 ## Demo
 See [mnist_demo.ipynb](notebooks/mnist_demo.ipynb) for a working mini example of `sadl` on [mnist](https://huggingface.co/datasets/ylecun/mnist).
 

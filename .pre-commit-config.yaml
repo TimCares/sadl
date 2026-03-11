@@ -35,7 +35,7 @@ repos:
     hooks:
       - id: pyright
         name: pyright
-        entry: uv run pyright
+        entry: uv run --frozen pyright
         language: system
         types: [python]
         pass_filenames: false
@@ -43,7 +43,7 @@ repos:
 
       - id: interrogate
         name: interrogate
-        entry: uv run interrogate
+        entry: uv run --frozen interrogate
         language: system
         types: [python]
         pass_filenames: false
@@ -51,7 +51,7 @@ repos:
 
       - id: pytest
         name: pytest
-        entry: uv run pytest
+        entry: uv run --frozen pytest
         language: system
         types: [python]
         pass_filenames: false
@@ -59,7 +59,7 @@ repos:
 
       - id: pip-audit
         name: pip-audit
-        entry: uv run pip-audit --ignore-vuln PYSEC-2022-42969 # ignore python-semantic-release vulnerability, only affects development
+        entry: uv run --frozen pip-audit --ignore-vuln PYSEC-2022-42969 # ignore python-semantic-release vulnerability, only affects development
         language: system
         pass_filenames: false
         always_run: true
