@@ -134,6 +134,7 @@ class Function(ABC):
         self.traverse_parameters(copy_param)
         return self
 
+    @property
     def is_training(self) -> bool:
         """If the function is in training mode or not.
 
@@ -209,15 +210,15 @@ class Function(ABC):
     @no_grad_fn
     def load_parameters(
         self,
+        state: OrderedDict[str, Tensor],
         *,
-        parameters: OrderedDict[str, Parameter],
         match_function_device: bool = False,
         partial: bool = False,
     ) -> Function:
         """Load parameters into this Function from a parameter dict.
 
         Args:
-            parameters (OrderedDict[str, Parameter]): Parameters keyed by path,
+            state (OrderedDict[str, Tensor]): Data for the parameters keyed by path,
                 as returned by `get_parameters`.
             match_function_device (bool): If True, copy each loaded
                 parameter to the target parameter's device before assignment.
@@ -230,15 +231,15 @@ class Function(ABC):
         """
 
         def load_param(path: str, param: Parameter) -> None:
-            init_data = parameters.get(path)
+            init_data = state.get(path)
             if init_data is None:
                 if not partial:
                     raise KeyError(f'Parameter data not found for "{path}"')
                 return  # Skip this parameter
 
-            if not isinstance(init_data, Parameter):
+            if not isinstance(init_data, Tensor):
                 raise TypeError(
-                    'Data in passed parameters must be of type "Parameter", '
+                    'Data in passed parameters must be of type "Tensor", '
                     f'found "{type(init_data).__name__}" ({init_data})'
                 )
 
@@ -256,7 +257,7 @@ class Function(ABC):
                     f'Found "{init_data.device}", expected "{param.device}".'
                 )
 
-            param[...] = init_data  # in-place assignment
+            param.data = init_data.data
             # we do not return "init_data" here because we only want to
             # modify the parameter **data** (the buffer), not the full object
             return  # Don't replace

@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+from .backend import TensorDevice
 from .tensor import Tensor, tensor
 
 _SADL_MAGIC = b"SADL"
@@ -29,6 +30,11 @@ def _str_to_dtype(dtype_str: str) -> Any:
 
 def save(data: Tensor | OrderedDict[str, Tensor], file_path: str) -> None:
     """Save Tensor data to disk using custom binary format.
+
+    Automatically moved the Tensors to cpu if necessary.
+
+    Note: **Only** saves the backing memory buffer, not the Tensor class instances
+    themselves!
 
     Args:
         data (Tensor | OrderedDict[str, Tensor]): The data to save,
@@ -60,11 +66,11 @@ def save(data: Tensor | OrderedDict[str, Tensor], file_path: str) -> None:
 
         # Write each tensor
         for key, tensor in tensors.items():
-            # Convert to numpy (CPU) for serialization
-            arr = np.asarray(tensor)
+            # Moved to cpu for serialization -> we have a numpy array then
+            array = tensor.cpu().data
             # Ensure C-contiguous
-            if not arr.flags["C_CONTIGUOUS"]:
-                arr = np.ascontiguousarray(arr)
+            if not array.flags["C_CONTIGUOUS"]:
+                array = np.ascontiguousarray(array)
 
             # Key
             key_bytes = key.encode("utf-8")
@@ -72,25 +78,27 @@ def save(data: Tensor | OrderedDict[str, Tensor], file_path: str) -> None:
             f.write(key_bytes)
 
             # Dtype
-            dtype_str = _dtype_to_str(arr.dtype)
+            dtype_str = _dtype_to_str(tensor.dtype)
             dtype_bytes = dtype_str.encode("utf-8")
             f.write(struct.pack("<B", len(dtype_bytes)))  # uint8 dtype length
             f.write(dtype_bytes)
 
             # Shape
-            f.write(struct.pack("<B", arr.ndim))  # uint8 ndim
-            f.writelines(struct.pack("<Q", dim) for dim in arr.shape)  # uint64 per dimension
+            f.write(struct.pack("<B", tensor.ndim))  # uint8 ndim
+            f.writelines(struct.pack("<Q", dim) for dim in tensor.shape)  # uint64 per dimension
 
             # Raw data
-            f.write(arr.tobytes())
+            f.write(array.tobytes())
 
 
-def load(file_path: str) -> Tensor | OrderedDict[str, Tensor]:
-    """Load Tensor data from disk.
+def load(file_path: str, device: TensorDevice | None = None) -> Tensor | OrderedDict[str, Tensor]:
+    """Load Tensor memory buffer from disk and convert to Tensor.
 
     Args:
         file_path (str): The file path from which to read the data. Must
             end with ".sadl".
+        device (TensorDevice | None, optional): To which device the loaded
+            data should be copied. If None, data will be loaded to cpu. Defaults to None.
 
     Raises:
         ValueError: If file_path doesn't end with ".sadl".
@@ -102,6 +110,9 @@ def load(file_path: str) -> Tensor | OrderedDict[str, Tensor]:
     """
     if not file_path.endswith(".sadl"):
         raise ValueError('file_path must end with ".sadl"')
+
+    if device is None:
+        device = TensorDevice("cpu")
 
     with open(file_path, "rb") as f:
         # Read and validate header
@@ -136,7 +147,7 @@ def load(file_path: str) -> Tensor | OrderedDict[str, Tensor]:
             data_bytes = f.read(num_bytes)
             arr = np.frombuffer(data_bytes, dtype=dtype).reshape(shape)
 
-            tensors[key] = tensor(arr)
+            tensors[key] = tensor(arr, device=device)
 
         # Return single tensor if that's what was saved
         if len(tensors) == 1 and "__single__" in tensors:

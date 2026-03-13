@@ -107,11 +107,6 @@ def dispatch_op(
 
     grad_tracking = is_global_grad_mode_enabled()
 
-    backward_fn = get_grad_op(op_name) if grad_tracking else None
-
-    if backward_fn is None and grad_tracking:
-        raise ValueError(f'Operation "{op_name}" not supported, no backward function available.')
-
     device = _determine_and_ensure_device(input_args)
 
     backend = get_array_module_from_device(device)
@@ -158,13 +153,24 @@ def dispatch_op(
     # ensure we always have Tensors in the graph:
     src = tuple(_to_tensor(i, device=device) for i in op_inputs)
 
+    result_requires_grad = any(elem.requires_grad for elem in src)
+
+    backward_fn = get_grad_op(op_name)
+
     result_tensor = Tensor(
         result,
-        requires_grad=any(elem.requires_grad for elem in src),
+        requires_grad=result_requires_grad,
     )
-    result_tensor.src = src
-    result_tensor.backward_fn = backward_fn
-    result_tensor.op_ctx = track_kwargs
+
+    if result_requires_grad:
+        if backward_fn is None:
+            raise ValueError(
+                f'Operation "{op_name}" not supported, no backward function available.'
+            )
+
+        result_tensor.src = src
+        result_tensor.backward_fn = backward_fn
+        result_tensor.op_ctx = track_kwargs
 
     return result_tensor
 

@@ -197,8 +197,8 @@ class Optimizer(ABC):
     @no_grad_fn
     def load_state(
         self,
-        *,
         state: OrderedDict[str, Tensor],
+        *,
         match_device: bool = False,
         partial: bool = False,
     ) -> "Optimizer":
@@ -245,7 +245,7 @@ class Optimizer(ABC):
                     f'expected "{tensor.device}".'
                 )
 
-            tensor[...] = init_data  # in-place assignment
+            tensor.data = init_data.data
             # we do not return "init_data" here because we only want to
             # modify the tensor **data** (the buffer), not the full object
             return  # Don't replace

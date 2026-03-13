@@ -70,7 +70,7 @@ model = sadl.Mlp([
 
 # Forward pass
 output = model(x)
-loss = output.sum()
+loss = np.sum(output)
 
 # Backward pass and optimization
 optimizer = sadl.SGD(list(model.parameters), lr=0.01)
@@ -181,8 +181,8 @@ When operations are performed on Tensors with `requires_grad=True`, the graph bu
 ```python
 x = sadl.tensor([1.0, 2.0], requires_grad=True)  # leaf, src = ()
 y = sadl.tensor([3.0, 4.0], requires_grad=True)  # leaf, src = ()
-z = x * y      # z.src = (x, y), z.backward_fn = mul_backward
-loss = z.sum() # loss.src = (z,), loss.backward_fn = sum_backward
+z = x * y        # z.src = (x, y), z.backward_fn = mul_backward
+loss = np.sum(z) # loss.src = (z,), loss.backward_fn = sum_backward
 ```
 
 A more complex example:
@@ -194,7 +194,7 @@ c = tensor(...)      # leaf
 
 d = a + b            # d.src = (a, b)
 e = d * c            # e.src = (d, c)
-f = e.sum()          # f.src = (e,)
+f = np.sum(e)        # f.src = (e,)
 
 Graph (following src backwards from f):
 

@@ -166,15 +166,6 @@ class Tensor(NDArrayOperatorsMixin):
         return len(self.shape)
 
     @property
-    def dtype(self) -> npt.DTypeLike:
-        """Data type of the data.
-
-        Returns:
-            npt.DTypeLike: Element type of the backing array.
-        """
-        return self.data.dtype
-
-    @property
     def size(self) -> int:
         """Number of elements in the data.
 
@@ -182,6 +173,15 @@ class Tensor(NDArrayOperatorsMixin):
             int: Total number of elements across all dimensions.
         """
         return np.size(self.data)
+
+    @property
+    def dtype(self) -> npt.DTypeLike:
+        """Data type of the data.
+
+        Returns:
+            npt.DTypeLike: Element type of the backing array.
+        """
+        return self.data.dtype
 
     def astype(self, dtype: npt.DTypeLike) -> Tensor:
         """Return a copy of this Tensor cast to `dtype`.
