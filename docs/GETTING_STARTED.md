@@ -1,4 +1,4 @@
-# Get Started
+# Getting started
 
 A small guide about all parts of `SADL`.
 
@@ -215,7 +215,7 @@ x = sadl.tensor([[1,2,3]])  # is on cpu by default
 y = my_func(x)
 ```
 
-**`Parameters can be defined as direct attributes, transitive, or in containers like lists and dicts`.**
+**`Parameters can be defined as direct or transitive attributes, or in containers like lists and dicts`.**
 
 A function can also have no parameters. A standard example are activation functions:
 ```python
