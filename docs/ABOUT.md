@@ -1,99 +1,44 @@
 # About
-`SADL` builds on [`numpy`](https://numpy.org/doc/stable/index.html), one of the most popular scientific computing and array library in python.
 
-Why? Because a Deep Learning framework consists of 3 major components:
-1. Linear Algebra (think add, subtract, matrix multiplication, ...)
-2. Gradient computation
-3. Backpropagation
+Since I started my journey in machine learning, I have trained quite a diverse set of neural networks, from simple MLPs to large transformers with contrastive loss, knowledge distillation, and much more.
 
-While 2. and 3. are more specific concepts somewhat exclusively used in Machine Learning, Linear Algebra is something more general: It appears everywhere and is one of the most well-know branches in maths.
+I was always quite familiar with how neural nets are trained and how backpropagation and gradient descent work on the surface:
 
-This is an advantage, because most Computer Scientist are very familiar with it:
-If you have used python, chances are pretty high that you have already used numpy or have at least heard of it.
+- Do a forward pass
+- Compute the loss
+- Do the backward pass and figure out the gradient of each parameter w.r.t the loss
+- Do a single gradient descent step
 
-Most Deep Learning frameworks, like Pytorch, Tensorflow, and TinyGrad, implement all three components from scratch.
-This makes sense if you are being serious about building a framework used in enterprise-grade systems and for the
-computationally most complex tasks, like training models with parameters in the trillions in giant datacenters.
+But if someone had asked me to build all of this from scratch, I would have struggled:
+- How do I know which parameter contributed to the loss function?
+- What even is a parameter? How do I represent it?
+- How do I compute the gradient and where do I store it?
+- How do I store which computations were performed by the model?
 
-For these cases, you need extreme efficiency, account for a lot of use-cases, and a lot of low-level utility and infrastructure code, with C-level kernels,
-multi-node gradient communication, and distributed checkpointing just to name a few.
+If I had just inspected the code of PyTorch or tinygrad, I might eventually have figured out some core logic,
+although even finding the actual implementation of the core concepts is already a challenge in itself due to the size of these codebases.
+And micrograd by Andrej Karpathy? Brilliant, but maybe a bit too minimal if you want to understand how more complex frameworks like PyTorch work.
 
-There is even quite the amusing story where engineers at Meta had to compute dummy operations to avoid stressing the power grid supplying the
-data center when training LLaMa 3 (find the story [here](https://newsletter.semianalysis.com/p/ai-training-load-fluctuations-at-gigawatt-scale-risk-of-power-grid-blackout)).
-While supporting these complex concepts is certainly impressive and of great value, it is exactly this what inflates the size of the codebases by several orders of magnitude,
-making understanding how the core of these systems actually work under the hood incredible difficult.
-
-Using numpy as the backend
-
-**Note**: The goal of this framework is by no means to show some novel new idea, and I do not like labeling things as "novel" anyway.
-
-Instead, the goal is to show what amazing things one can build on existing components with minimal and clear code.
-And if you look at how the code works, you will find that the core of the algorithms powering the training of today's foundation models really aren't that difficult to understand.
-
-
-# GPUs
-
-GPUs are the bread and butter of every Deep Learning framework. From the point were the models you are training start to have tens of millions of parameters,
-and your datasets have a similar magnitude, training on the CPU becomes painfully slow.
-Fortunately, since most operations in Neural Networks, think Matrix Multiplication, can be parallelized, GPUs allow for massive speedup.
-
-Since this speedup mainly affects components 1. and 2., the linear algebra backend needs to support computation on the GPU, e.g. via CUDA,
-which numpy does not.
-
-However, there is an often overlooked package which does exactly that: [cupy](https://cupy.dev).
-
-Cupy is an array library which can almost be used interchangeably with numpy. The API is almost exactly the same, with one small difference: All operations run on the GPU!
-
-```python
-import cupy as xp
-# or: import numpy as xp
-
-x = xp.arange(6).reshape(2, 3).astype('f')
-
-print(x)
-# array([[ 0.,  1.,  2.],
-#        [ 3.,  4.,  5.]], dtype=float32)
-
-x_sum = x.sum(axis=1)
-
-print(x_sum)
-# array([  3.,  12.], dtype=float32)
+```text
+"What I cannot create, I do not understand" - Richard Feynman
 ```
 
-This is huge, because (1) we do not need to change any code when we want to switch to using the GPU, and (2) it keeps the library laser-focused on what actually matters: **Gradients, backpropagation, and optimizers**.
+To me, this means that true understanding comes from rebuilding concepts from scratch. It emphasizes active creation over passive learning.
 
-And now the best part: Cupy is [interoperable](https://docs.cupy.dev/en/stable/user_guide/interoperability.html#numpy) with numpy!
+A typical disease of people is LGTM: "Looks good to me." You see an existing solution to a problem and understand it, or maybe you can even verify it, which gives you the illusion that you could have created it yourself.
+But is that really true? No one has ever learned programming just by looking at code.
 
-What does that mean? Cupy implements the numpy `__array_ufunc__` interface, meaning that if you call a numpy op on a cupy array,
-instead of the numpy backend executing the operation on the cpu, which would throw an
-error since cupy arrays only live on the gpu, the operation is dispatched to the cupy kernels.
-Therefore, as long as the array creation happens via the cupy api, you can use most of the operations provided by the numpy package on cupy arrays.
+This reminded me of my time at university, where I graded exams of undergrad students in C/C++. One glance was often enough to tell whether a student had actually done the exercises, or had just looked at the solutions and thought: "Yep, makes sense, I would have done the same." The result: a failed exam.
 
-```python
-from typing import Literal, Any
-import cupy as cp
-import numpy as np
+Especially now, when we can use AI to create software from scratch and start verifying code more than writing it, this problem has become more present than ever before.
 
-def create_array(data: list[Any], device: Literal["cpu" | "cuda"]) -> np.ndarray:
-    if device == "cpu":
-        return np.array(data)
-    # else, create on gpu:
-    return cp.array(data)
+There is even more to it: I remember Andrej Karpathy saying in a podcast that by building things yourself, you gain exposure to topics and problems you might never have encountered otherwise.
+This will inevitably lead to struggle, but in my, admittedly not yet very long, experience, that is exactly where the learning happens.
+To sum it up: if you start (re-)building things yourself, you will probably learn more than you originally set out to learn.
 
-x = create_array([1,2,3], device="cuda")
+So, back to this project: all of these questions I would have struggled with were swirling in my mind, paired with the fact that I had already trained so many models, yet still knew so little about how training them actually works at the core.
+Together with the thoughts of Feynman and Karpathy, I knew I had to build it from scratch.
 
-x_sum = np.sum(x) # use numpy package, but run on gpu
+The result is `SADL`: a minimal deep learning framework that is actually readable, and gives a glimpse into how more complex deep learning frameworks work.
 
-print(x_sum)
-```
-
-This allows `SADL` Tensors to be _used with the numpy package/API regardless on which device the backing memory buffer of the Tensor_ (the arrays, so np.ndarray or cp.ndarray) _lives_.
-
-The extra code necessary to support this, and abstract away if a numpy or cupy array is currently used, is minimal. The result: To the client there are just Tensors, and they
-can live on the cpu or any gpu available, and can be moved between the devices. These are **exactly** the semantics provided by Pytorch and Tensorflow with almost **zero** overhead
-and an API one couldn't be more familiar with!
-
-Note: There are some nuances when moving Tensors between devices which other frameworks aren't quite transparent about, but `SADL` brings light into the dark: See more [here](./COPY_TO_DEVICE.md).
-
-Also, there are some [differences between numpy and cupy](https://docs.cupy.dev/en/stable/user_guide/difference.html), so behavior might differ in edge cases depending if your Tensors are on the cpu or gpu.
-As always: If you discover any unexpected behavior please let me know by opening an issue.
+Dive into the concept of `SADL` [here](CONCEPT.md).

@@ -5,8 +5,8 @@
 <h1 align="center">SADL: Simple Autograd Deep Learning</h1>
 
 <p align="center">
-  A minimal, readable deep learning framework built on NumPy and CuPy.<br>
-  Automatic differentiation, neural network primitives, and optimization in ~2000 lines of Python.
+  A minimal, actually readable deep learning framework built on NumPy and CuPy.<br>
+  Automatic differentiation, neural network primitives, and optimization with just a handful of Python files.
 </p>
 
 <p align="center">
@@ -19,6 +19,9 @@
   <a href="https://microsoft.github.io/pyright/"><img src="https://img.shields.io/badge/pyright-type%20checked-blue?style=flat" alt="Pyright"></a>
   <img alt="Docstring coverage" src="assets/interrogate_badge.png" height="22">
 </p>
+
+## The tale
+Seek out [this](docs/ABOUT.md), to find out the story behind `SADL`.
 
 ## Demo
 See [mnist_demo.ipynb](notebooks/mnist_demo.ipynb) for a working mini example of `sadl` on [mnist](https://huggingface.co/datasets/ylecun/mnist).
@@ -57,9 +60,10 @@ pip install "py-sadl[gpu]"
 
 ```python
 import sadl
+import numpy as np
 
 # Create tensors
-x = sadl.tensor([[1.0, 2.0], [3.0, 4.0]], requires_grad=True)
+x = sadl.tensor([[1.0, 2.0], [3.0, 4.0]])
 
 # Build a model
 model = sadl.Mlp([
@@ -95,17 +99,21 @@ SADL joins a family of educational and minimal deep learning frameworks that hav
 
 **[tinygrad](https://github.com/tinygrad/tinygrad)** by George Hotz takes a different approach, building a fully-featured deep learning framework with a focus on simplicity and hardware portability. tinygrad supports multiple backends and has grown into a serious alternative for running models on diverse hardware.
 
-SADL takes inspiration from both projects while pursuing its own path: building directly on NumPy's ndarray infrastructure. By subclassing `numpy.ndarray` and intercepting operations via `__array_ufunc__` and `__array_function__`, SADL achieves autograd without introducing a new tensor abstraction. This means existing NumPy code works unchanged, and the mental model stays close to the numerical computing patterns that researchers already know.
+SADL takes inspiration from both projects while pursuing its own path: building directly on NumPy's ndarray infrastructure.
+By implementing NumPy's operator and dispatch protocols via `NDArrayOperatorsMixin`, `__array_ufunc__`, and `__array_function__`,
+SADL achieves autograd without introducing a custom array backend.
+This means existing NumPy code works unchanged, and the mental model stays close to the numerical computing patterns that researchers already know.
 
 ## Design Principles
 
 ### Build on NumPy
 
-SADL extends `numpy.ndarray` directly rather than wrapping arrays in custom containers. This means:
+SADL builds on NumPy. This means:
 
 - All NumPy operations work out of the box
 - No need to learn a new tensor API
 - Seamless interoperability with the scientific Python ecosystem
+- Only a thin `Tensor` layer on top of NumPy arrays
 - GPU support through CuPy with zero code changes
 
 ### Mathematical Functions as First-Class Citizens
@@ -125,7 +133,7 @@ SADL favors explicit behavior over magic:
 - Gradients must be explicitly enabled with `requires_grad=True`
 - Parameters are a distinct type that always tracks gradients
 - The computation graph is visible and inspectable
-- Device transfers are explicit operations
+- Device transfers (cpu ↔ cuda) are explicit operations
 
 ### Minimal but Complete
 
@@ -134,131 +142,18 @@ The framework includes only what is necessary for training neural networks:
 - Tensor with autograd support
 - Parameter for learnable weights
 - Function base class for layers
-- Optimizer base class with SGD implementation
+- Optimizer base class with built-in SGD and Adam due to their frequent use
 - Serialization for model persistence
 
 Additional layers and optimizers can be built on these primitives without modifying core code.
-
-## How Autodiff Works
-
-SADL implements reverse-mode automatic differentiation (backpropagation) using a dynamic computation graph, similar to PyTorch.
-
-### The Computation Graph
-
-In SADL, **Tensors are the computation graph**. There is no separate graph data structure. Each Tensor stores a `src` attribute pointing to the Tensors it was created from. This forms a back-referencing graph where each node knows its parents, but parents do not know their children:
-
-```
-Forward computation:
-
-x ─┐
-   ├─► z ─► loss
-y ─┘
-
-Graph structure (src references):
-
-   loss
-    │
-    ▼
-    z
-   ╱ ╲
-  ▼   ▼
-  x   y
-```
-
-This is intentional. Deep learning frameworks optimize for backward traversal because that is what backpropagation requires. Starting from the loss, we follow `src` references backward through the graph to compute gradients. Forward references (parent to child) are unnecessary and would only consume memory.
-
-### Forward Pass: Building the Graph
-
-When operations are performed on Tensors with `requires_grad=True`, the graph builds itself automatically:
-
-1. The `Tensor` class overrides `__array_ufunc__` and `__array_function__` to intercept NumPy operations
-2. Each operation creates a new Tensor that stores:
-  - `src`: References to input tensors (the parents in the graph)
-  - `backward_fn`: The gradient function for this operation
-  - `op_ctx`: Any context needed for gradient computation (axis, masks, etc.)
-3. The graph grows dynamically as operations execute
-
-```python
-x = sadl.tensor([1.0, 2.0], requires_grad=True)  # leaf, src = ()
-y = sadl.tensor([3.0, 4.0], requires_grad=True)  # leaf, src = ()
-z = x * y        # z.src = (x, y), z.backward_fn = mul_backward
-loss = np.sum(z) # loss.src = (z,), loss.backward_fn = sum_backward
-```
-
-A more complex example:
-
-```
-a = tensor(...)      # leaf
-b = tensor(...)      # leaf
-c = tensor(...)      # leaf
-
-d = a + b            # d.src = (a, b)
-e = d * c            # e.src = (d, c)
-f = np.sum(e)        # f.src = (e,)
-
-Graph (following src backwards from f):
-
-    f
-    │
-    ▼
-    e
-   ╱ ╲
-  ▼   ▼
-  d   c
- ╱ ╲
-▼   ▼
-a   b
-```
-
-### Backward Pass: Computing Gradients
-
-When `optimizer.backward(loss)` is called:
-
-1. **Topological Sort**: The graph is traversed from the loss tensor to find all nodes, ordered so that each node appears after all nodes that depend on it. This uses an iterative stack-based algorithm to avoid recursion limits on deep graphs.
-2. **Gradient Propagation**: Starting from the loss (seeded with gradient 1.0), each node's `backward_fn` is called with:
-  - The input tensors (`src`)
-  - Which inputs need gradients (`compute_grad`)
-  - The upstream gradient (`grad_out`)
-  - Operation context (`op_ctx`)
-3. **Gradient Accumulation**: Gradients flow backward through the graph. When a tensor is used in multiple operations, gradients are summed.
-4. **Graph Cleanup**: After backpropagation, the graph structure is cleared to free memory. Parameter gradients are retained for the optimizer step.
-
-### Gradient Operations Registry
-
-Each supported operation has a corresponding backward function registered in `grad_ops.py` with metadata (op type inspired by [tinygrad](https://github.com/tinygrad/tinygrad)):
-
-```python
-@register_grad_op(
-    op_type=OpType.ELEMENTWISE,
-    op_inputs=OpInputs.BINARY,
-    forward_names=("mul", "multiply"),
-)
-@broadcastable
-def mul_backward(*inputs, compute_grad, grad_out):
-    x, y = inputs
-    grad_x = y * grad_out if compute_grad[0] else None
-    grad_y = x * grad_out if compute_grad[1] else None
-    return grad_x, grad_y
-```
-
-The `@broadcastable` decorator handles gradient reduction when inputs were broadcast during the forward pass.
-
-### Supported Operations
-
-Unary: `abs`, `negative`, `sqrt`, `square`, `exp`, `log`, `sin`, `cos`
-
-Binary: `add`, `subtract`, `multiply`, `divide`, `power`, `matmul`, `maximum`, `minimum`
-
-Reductions: `sum`, `mean`, `max`, `min`
 
 ## Architecture
 
 ```
 sadl/
 ├── __init__.py     # Public API re-exports
-├── backend.py      # NumPy/CuPy abstraction
 ├── disk.py         # Saving and loading data to/from disk
-├── tensor.py       # Tensor, Parameter, serialization
+├── tensor.py       # Tensor and Parameter
 ├── grad_ops.py     # Gradient operation registry
 ├── function.py     # Neural network layers
 ├── optimizer.py    # Optimizer base class, SGD, backpropagation
@@ -268,7 +163,7 @@ sadl/
 
 ### Key Components
 
-**Tensor**: Subclass of `numpy.ndarray` with additional attributes for autograd. Intercepts NumPy operations to build the computation graph.
+**Tensor**: Wrapper around `np.ndarray` with additional attributes for autograd. Intercepts NumPy operations to build the computation graph.
 
 **Parameter**: Tensor subclass for learnable weights. Always requires gradients and retains them after backward pass for gradient accumulation.
 
@@ -297,12 +192,23 @@ See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for behavior guidelines. The file w
 
 ## Future Plans
 
+The goal is to expand the ecosystem without losing the small and readable core.
+There are definitely many more things worth adding, like more layers, architectures, and domain-specific tooling.
+But if all of that keeps accumulating inside this repository, it creates exactly the kind of codebase bloat that makes larger frameworks hard to understand in the first place.
+
+That is why the long-term direction is a small core `sadl` repository, plus separate plugin-style repositories for higher-level functionality, similar in spirit to projects like `timm`, `torchvision`, or `torchaudio`.
+This keeps the core focused on tensors, gradients, backpropagation, functions, optimizers, and device handling, while allowing the surrounding ecosystem to grow independently.
+
+### Built In
 - Static graph compilation for repeated computations
+
+### Separate Repositories
 - Additional layers and components (convolution, batch normalization, attention)
+- Higher-level model architectures and domain libraries
 - XLA compilation backend for TPU support
 - Automatic mixed precision training
 - Distributed training primitives
 
 ## See Also
 
-- `docs/API_REFERENCE.md`: Complete API documentation
+- [Getting Started](docs/GETTING_STARTED.md): A light description of all key components with examples.
