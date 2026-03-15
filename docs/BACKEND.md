@@ -161,9 +161,9 @@ This gives us a surprisingly clean setup:
 - one shared backend interface
 - CPU or GPU decided at runtime
 
-And because CuPy behaves so similarly to NumPy, the amount of extra code needed for this is refreshingly small.
+And because CuPy behaves so similar to NumPy, the amount of extra code needed for this is refreshingly small.
 
-## Static Types vs Runtime Reality
+## Static Types vs Runtime
 
 There is also a nice typing benefit here.
 

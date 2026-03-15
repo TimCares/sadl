@@ -93,21 +93,6 @@ tensor3 = sadl.tensor(
 )
 ```
 
-**Properties**:
-- `device`: The current device the `Tensor` is on. It is of type `sadl.TensorDevice`.
-- `shape`: Shape of the Tensor.
-- `ndim`: Number of dimensions the Tensor has.
-- `size`: Number of elements in the Tensor.
-- `dtype`: The datatype of the `Tensor`, represented as a NumPy dtype.
-
-**Methods:**
-- `astype(np.dtype)`: Create a copy of the `Tensor` with a different NumPy dtype.
-- `copy_to_device(device)`: Copy the `Tensor` to CPU or any available GPU device.
-- `detach()`: Remove from computation graph.
-- `cpu()`: Move to CPU.
-- `gpu(device_id=0)`: Move to GPU with device id 0.
-- `item()`: If the Tensor is a scalar value, get the actual scalar value, e.g. float.
-
 ## Parameter
 
 `Parameter` is a `Tensor` subclass for learnable weights. These are the trainable weights of any neural network
