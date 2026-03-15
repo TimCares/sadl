@@ -26,6 +26,10 @@ Seek out [this](docs/ABOUT.md), to find out the story behind `SADL`.
 ## Demo
 See [mnist_demo.ipynb](notebooks/mnist_demo.ipynb) for a working mini example of `sadl` on [mnist](https://huggingface.co/datasets/ylecun/mnist).
 
+## Getting Started
+
+A light description of all key components with examples: [GETTING_STARTED.md](docs/GETTING_STARTED.md)
+
 ## Installation
 
 Using [uv](https://docs.astral.sh/uv/) for installation is recommended.
@@ -147,20 +151,6 @@ The framework includes only what is necessary for training neural networks:
 
 Additional layers and optimizers can be built on these primitives without modifying core code.
 
-## Architecture
-
-```
-sadl/
-├── __init__.py     # Public API re-exports
-├── disk.py         # Saving and loading data to/from disk
-├── tensor.py       # Tensor and Parameter
-├── grad_ops.py     # Gradient operation registry
-├── function.py     # Neural network layers
-├── optimizer.py    # Optimizer base class, SGD, backpropagation
-├── ops.py          # Array creation and device utilities
-└── utils.py        # Device transfer utilities
-```
-
 ### Key Components
 
 **Tensor**: Wrapper around `np.ndarray` with additional attributes for autograd. Intercepts NumPy operations to build the computation graph.
@@ -208,7 +198,3 @@ This keeps the core focused on tensors, gradients, backpropagation, functions, o
 - XLA compilation backend for TPU support
 - Automatic mixed precision training
 - Distributed training primitives
-
-## See Also
-
-- [Getting Started](docs/GETTING_STARTED.md): A light description of all key components with examples.
