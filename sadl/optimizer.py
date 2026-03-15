@@ -360,12 +360,8 @@ class Optimizer(ABC):
                         raise RuntimeError(
                             f"Gradient shape {src_grad.shape} does not match source shape {src.shape}"
                         )
-                    current_src_grad = (
-                        src.grad
-                        if src.grad is not None
-                        else zeros_like(src).data  # see "ones_like(loss).data"
-                    )
-                    src.grad = current_src_grad + src_grad
+
+                    src.grad = src_grad if src.grad is None else src.grad + src_grad
 
         self._clear_graph(topo_nodes=node_order)
 

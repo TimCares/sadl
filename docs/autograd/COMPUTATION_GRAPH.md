@@ -1,13 +1,15 @@
 # Computation Graph
 
+`SADL` uses a dynamic computation graph _by default_.
+That means the graph is built during the forward pass, exactly while the user code is running.
 
-## How Autodiff Works
+## The Main Idea
 
-SADL implements reverse-mode automatic differentiation (backpropagation) using a dynamic computation graph, similar to PyTorch.
+In `SADL`, **tensors are the computation graph**.
+There is no separate graph object living somewhere else.
+Each result tensor stores references to the tensors it was created from.
 
-### The Computation Graph
-
-In SADL, **Tensors are the computation graph**. There is no separate graph data structure. Each Tensor stores a `src` attribute pointing to the Tensors it was created from. This forms a back-referencing graph where each node knows its parents, but parents do not know their children:
+This forms a back-referencing graph where each node knows its parents, but parents do not know their children:
 
 ```
 Forward computation:
@@ -27,88 +29,142 @@ Graph structure (src references):
   x   y
 ```
 
-This is intentional. Deep learning frameworks optimize for backward traversal because that is what backpropagation requires. Starting from the loss, we follow `src` references backward through the graph to compute gradients. Forward references (parent to child) are unnecessary and would only consume memory.
+This is intentional.
+Backpropagation starts at the loss and walks backwards.
+So storing parent references is enough, while child references would only consume extra memory.
 
-### Forward Pass: Building the Graph
+## Where the Graph Is Built
 
-When operations are performed on Tensors with `requires_grad=True`, the graph builds itself automatically:
+The graph is built through the combination of:
 
-1. The `Tensor` class overrides `__array_ufunc__` and `__array_function__` to intercept NumPy operations
-2. Each operation creates a new Tensor that stores:
-  - `src`: References to input tensors (the parents in the graph)
-  - `backward_fn`: The gradient function for this operation
-  - `op_ctx`: Any context needed for gradient computation (axis, masks, etc.)
-3. The graph grows dynamically as operations execute
+1. `Tensor.__array_ufunc__`
+2. `Tensor.__array_function__`
+3. `sadl.dispatch.dispatch_op(...)`
 
-```python
-x = sadl.tensor([1.0, 2.0], requires_grad=True)  # leaf, src = ()
-y = sadl.tensor([3.0, 4.0], requires_grad=True)  # leaf, src = ()
-z = x * y        # z.src = (x, y), z.backward_fn = mul_backward
-loss = np.sum(z) # loss.src = (z,), loss.backward_fn = sum_backward
-```
+The tensor methods intercept NumPy-style operations.
+Then `dispatch_op(...)` performs the real work.
 
-A more complex example:
+This is why `sadl/dispatch.py` is such an important file:
+it is the place where a normal numerical operation turns into a tracked graph operation.
 
-```
-a = tensor(...)      # leaf
-b = tensor(...)      # leaf
-c = tensor(...)      # leaf
+## What `dispatch_op(...)` Does
 
-d = a + b            # d.src = (a, b)
-e = d * c            # e.src = (d, c)
-f = np.sum(e)        # f.src = (e,)
+The logic in `dispatch_op(...)` is compact, but it does several important things in one place:
 
-Graph (following src backwards from f):
+1. Unwrap `Tensor` inputs to their underlying array data.
+2. Determine the device on which the op should run.
+3. Select the correct backend, NumPy or CuPy.
+4. Execute the forward operation in the array backend.
+5. Wrap the result back into a `Tensor`.
+6. If gradients matter, attach graph metadata to the result tensor.
 
-    f
-    │
-    ▼
-    e
-   ╱ ╲
-  ▼   ▼
-  d   c
- ╱ ╲
-▼   ▼
-a   b
-```
+So the _dynamic_ computation graph is not built by a separate "graph builder".
+It is built exactly at the moment the forward operation executes.
 
-### Backward Pass: Computing Gradients
+## A Simplified View of the Implementation
 
-When `optimizer.backward(loss)` is called:
-
-1. **Topological Sort**: The graph is traversed from the loss tensor to find all nodes, ordered so that each node appears after all nodes that depend on it. This uses an iterative stack-based algorithm to avoid recursion limits on deep graphs.
-2. **Gradient Propagation**: Starting from the loss (seeded with gradient 1.0), each node's `backward_fn` is called with:
-  - The input tensors (`src`)
-  - Which inputs need gradients (`compute_grad`)
-  - The upstream gradient (`grad_out`)
-  - Operation context (`op_ctx`)
-3. **Gradient Accumulation**: Gradients flow backward through the graph. When a tensor is used in multiple operations, gradients are summed.
-4. **Graph Cleanup**: After backpropagation, the graph structure is cleared to free memory. Parameter gradients are retained for the optimizer step.
-
-### Gradient Operations Registry
-
-Each supported operation has a corresponding backward function registered in `grad_ops.py` with metadata (op type inspired by [tinygrad](https://github.com/tinygrad/tinygrad)):
+This is not the full implementation, but it matches the real structure of `sadl/dispatch.py`:
 
 ```python
-@register_grad_op(
-    op_type=OpType.ELEMENTWISE,
-    op_inputs=OpInputs.BINARY,
-    forward_names=("mul", "multiply"),
-)
-@broadcastable
-def mul_backward(*inputs, compute_grad, grad_out):
-    x, y = inputs
-    grad_x = y * grad_out if compute_grad[0] else None
-    grad_y = x * grad_out if compute_grad[1] else None
-    return grad_x, grad_y
+def dispatch_op(op_name, *, op_fn, op_inputs, **kwargs):
+    input_args = [a.data if isinstance(a, Tensor) else a for a in op_inputs]
+
+    device = _determine_and_ensure_device(input_args)
+    backend = get_array_module_from_device(device)
+
+    result = op_fn(*input_args, **kwargs)
+    result = backend.asarray(result)
+
+    if not grad_tracking:
+        return Tensor(result, requires_grad=False)
+
+    src = tuple(_to_tensor(i, device=device) for i in op_inputs)
+    result_requires_grad = any(elem.requires_grad for elem in src)
+    backward_fn = get_grad_op(op_name)
+
+    result_tensor = Tensor(result, requires_grad=result_requires_grad)
+
+    if result_requires_grad:
+        result_tensor.src = src
+        result_tensor.backward_fn = backward_fn
+        result_tensor.op_ctx = kwargs
+
+    return result_tensor
 ```
 
-The `@broadcastable` decorator handles gradient reduction when inputs were broadcast during the forward pass.
+That is really the heart of how the graph is built in `SADL`.
 
-### Supported Operations
+## Why This Place Is So Natural
 
-Unary: `abs`, `negative`, `sqrt`, `square`, `exp`, `log`, `sin`, `cos`
+I think this is a particularly clean design, because at the exact moment an operation runs, `SADL` already knows everything it needs:
 
-Binary: `add`, `subtract`, `multiply`, `divide`, `power`, `matmul`, `maximum`, `minimum`
+- which operation is being executed
+- which inputs participated
+- which backend is active
+- which extra context should be remembered
 
-Reductions: `sum`, `mean`, `max`, `min`
+So `dispatch.py` is the natural place where graph nodes are born.
+
+## What Gets Stored in a Node
+
+If the result of an operation requires gradients, `dispatch_op(...)` stores three important things on the resulting tensor:
+
+- `src`: the parent tensors
+- `backward_fn`: the backward function for this operation
+- `op_ctx`: extra context from the forward pass, for example `axis`, `keepdims`, or masks
+
+This is why graph building stays local and cheap.
+Each node only stores what it personally needs for the backward pass later.
+
+There is also one small but important detail:
+even non-`Tensor` inputs can be converted into tensors for the graph via `_to_tensor(...)`.
+That keeps the graph structurally consistent: There are only Tensors.
+
+## Special Cases
+
+Some operations need extra information from the forward pass.
+
+For example, `max`, `min`, `maximum`, and `minimum` create masks during the forward pass and store them in `op_ctx`.
+These masks are then used later during backpropagation to decide where gradients should flow.
+This is not strictly necessary, as these masks can also be computed during the backward pass, but it is a nice little optimization.
+
+So `dispatch.py` does not just connect nodes.
+It also captures forward-time information that later becomes essential in the backward pass.
+
+## A Small Example
+
+```python
+import numpy as np
+import sadl
+
+x = sadl.tensor([1.0, 2.0], requires_grad=True)
+y = sadl.tensor([3.0, 4.0], requires_grad=True)
+
+z = x * y
+loss = np.sum(z)
+```
+
+After these operations:
+
+- `x` and `y` are leaves, so `x.src == ()` and `y.src == ()`
+- `z` was created by multiplication, so `z.src == (x, y)`
+- `loss` was created by reduction, so `loss.src == (z,)`
+
+We can sketch that as:
+
+```
+loss
+ │
+ ▼
+ z
+╱ ╲
+▼  ▼
+x  y
+```
+
+The forward pass just tracks operations and creates this graph one operation at a time.
+Nothing more than that happens.
+
+Further reading:
+- How the graph is traversed backwards -> [`BACKPROPAGATION.md`](BACKPROPAGATION.md)
+- Where `backward_fn` values come from -> [`GRADIENTS.md`](GRADIENTS.md)

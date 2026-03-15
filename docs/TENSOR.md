@@ -276,7 +276,7 @@ So `SADL` keeps the NumPy-style API for most operations on purpose.
 
 ## Further Reading
 
-To continue the story: "How tensors are turned into autodiff nodes" -> [`autograd/NODES.md`](autograd/NODES.md).
+To continue the story: How `SADL` trains Neural Networks -> [`autograd/AUTOGRAD.md`](autograd/AUTOGRAD.md).
 
 Why device handling is more complicated than it seems -> [`DEVICE.md`](DEVICE.md).
 
