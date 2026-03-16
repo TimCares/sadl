@@ -79,6 +79,11 @@ def is_ndarray(data: Any) -> TypeGuard[NDArray]:
     return isinstance(data, _RUNTIME_ARRAY_TYPES)
 
 
+def is_ndarray_like(data: Any) -> TypeGuard[NDArrayLike]:
+    """Return whether `data` is a numeric scalar or array that can serve as an operand."""
+    return isinstance(data, (int, float, complex, np.generic)) or is_ndarray(data)
+
+
 class ArrayModule(Protocol):
     """Structural type for numpy/cupy module objects used as array backends.
 
@@ -116,4 +121,5 @@ __all__ = [
     "TensorDevice",
     "get_array_module_from_device",
     "is_ndarray",
+    "is_ndarray_like",
 ]

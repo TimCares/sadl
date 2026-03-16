@@ -7,6 +7,7 @@ from .array_provider import (
     NDArrayLike,
     get_array_module_from_device,
     is_ndarray,
+    is_ndarray_like,
 )
 from .device import (
     DeviceLike,
@@ -30,4 +31,5 @@ __all__ = [
     "copy_array",
     "get_array_module_from_device",
     "is_ndarray",
+    "is_ndarray_like",
 ]

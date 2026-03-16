@@ -10,13 +10,10 @@ from .backend import (
 )
 from .grad_mode import is_global_grad_mode_enabled
 from .grad_ops import (
-    astype_backward,
     copy_to_device_backward,
 )
 
 if TYPE_CHECKING:
-    import numpy.typing as npt
-
     from .tensor import Tensor
 
 
@@ -75,48 +72,6 @@ def copy_to_device(x: Tensor, /, *, device: TensorDevice) -> Tensor:
     return new_tensor
 
 
-# TODO
-def astype(x: Tensor, /, *, dtype: npt.DTypeLike) -> Tensor:
-    """Create a copy of a Tensor `x` with its dtype given by `dtype`.
-
-    Args:
-        x (Tensor): The Tensor to have as `dtype`.
-        dtype (npt.DTypeLike): The dtype.
-
-    Returns:
-        Tensor: A copy of `x` with the dtype given by `dtype`.
-    """
-    if x.dtype == dtype:
-        return x
-
-    # Check if this is a non-leaf tensor in an active computation graph
-    # (like intermediate activations in multi-GPU scenarios)
-    is_in_graph = (
-        is_global_grad_mode_enabled()
-        and x.requires_grad
-        and len(x.src) > 0
-        and any(s.requires_grad for s in x.src)
-    )
-
-    from .tensor import tensor  # noqa: PLC0415
-
-    new_tensor = tensor(
-        x.data,
-        device=x.device,
-        dtype=dtype,
-        requires_grad=True if is_in_graph else x.requires_grad,
-        keep_grad=x.keep_grad,
-    )
-
-    if is_in_graph:
-        # Tracked operation: gradients flow back through dtype conversion
-        new_tensor.src = (x,)
-        new_tensor.backward_fn = astype_backward
-
-    return new_tensor
-
-
 __all__ = [
-    "astype",
     "copy_to_device",
 ]

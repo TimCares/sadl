@@ -23,7 +23,7 @@ model = sadl.Mlp([
 model = model.copy_to_device(gpu)
 
 # Create an optimizer
-optimizer = sadl.SGD(list(model.parameters), lr=0.01)
+optimizer = sadl.SGD(model.get_parameters(), lr=0.01)
 optimizer = optimizer.copy_to_device(gpu)
 
 # A single training step
@@ -113,6 +113,13 @@ param_from_array = sadl.Parameter(array)
 
 tensor = sadl.tensor([1,2,3], device=sadl.TensorDevice("cuda", device_id=1))
 param_on_second_gpu = sadl.Parameter(tensor)
+```
+
+Parameters can be frozen by setting `requres_grad` to `False`. However, to avoid accidental
+freezing `requres_grad` is not exposed as an argument in `Parameter.__init__` and must be set after construction:
+
+```python
+param_on_second_gpu.requires_grad = False
 ```
 
 Since each `Parameter` is also a `Tensor`, it has the same properties and methods available.
@@ -208,20 +215,6 @@ softmax = Softmax()
 
 `sadl.Parameter` and `sadl.Function` are enough to create even complex transformer architectures.
 
-**Properties:**
-- `parameters`: View of all Parameters.
-- `requires_grad`: Get/set gradient tracking for all parameters.
-- `device`: Tuple of devices where parameters reside.
-- `is_training`: If the model is currently in training mode (important for Dropout, BatchNorm, ...).
-
-**Methods:**
-- `get_parameters()`: Get OrderedDict of parameters.
-- `load_parameters(parameters, match_function_device, partial)`: Load parameter values.
-- `copy_to_device(device)`: Move the function/model to a device. Internally, moves all parameters to the device.
-- `train()`: Set to training mode (important for Dropout, BatchNorm, ...).
-- `inference()`: Set to inference mode (important for Dropout, BatchNorm, ...).
-
-
 ## Optimizers
 
 Optimizers perform, as the name suggests, the actual optimization of the `Function` parameters.
@@ -240,22 +233,9 @@ model = sadl.Mlp([
 device = sadl.TensorDevice("cuda", device_id=0)
 model = model.copy_to_device(device)
 
-optimizer = sadl.SGD(params=list(model.parameters), lr=1e-3)
+optimizer = sadl.SGD(params=model.get_parameters(), lr=1e-3)
 optimizer = optimizer.copy_to_device(device=device)
 ```
-
-**Properties:**
-- `state`: View of optimizer state tensors
-- `device`: Tuple of devices where state resides
-
-**Methods:**
-- `backward(loss)`: Compute gradients via backpropagation with respect to a loss.
-- `step()`: Take one step by updating the tracked parameters.
-- `zero_grad(additional_tensors=None)`: Clear gradients.
-- `get_state(to_device=None)`: Get OrderedDict of the optimizer state (important if the Optimizer has an internal state, e.g. for Adam).
-- `load_state(state, match_device, partial)`: Load the state.
-- `copy_to_device(device)`: Move state to device. Does nothing if no state is there, e.g. for vanilla SGD.
-
 
 ## Serialization
 

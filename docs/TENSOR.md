@@ -130,7 +130,6 @@ Some of these are just thin wrappers around `data`, while others enforce the cor
 
 **Methods:**
 Array wrappers:
-- `astype(np.dtype)`: Create a copy of the `Tensor` with a different NumPy dtype.
 - `item()`: If the Tensor is a scalar value, get the actual scalar value, e.g. float.
 
 Device handling and graph-related utilities:
@@ -250,7 +249,7 @@ This way the array is created directly on the target backend.
 ## Limitations
 
 For most operations, you use `np.<op>` instead of `Tensor.<op>`.
-Typical exceptions are utility methods like `Tensor.astype(...)`, `Tensor.copy_to_device(...)`, `Tensor.cpu()`, or `Tensor.gpu()`.
+Typical exceptions are utility methods like `Tensor.copy_to_device(...)`, `Tensor.cpu()`, or `Tensor.gpu()`.
 
 Why?
 Because otherwise I would have to write a wrapper for each operation, which would look something like this:

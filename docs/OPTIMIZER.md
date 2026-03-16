@@ -22,7 +22,7 @@ This is why training code in `SADL` typically looks like this:
 
 ```python
 # Create an optimizer
-optimizer = sadl.SGD(list(model.parameters), lr=0.01)
+optimizer = sadl.SGD(model.get_parameters(), lr=0.01)
 optimizer = optimizer.copy_to_device(gpu)
 
 # A single training step
@@ -47,7 +47,7 @@ If a parameter should be optimized, it must appear in the computation graph of w
 
 Otherwise, backpropagation will never reach it.
 `.grad` will stay `None`.
-And when `step()` checks that parameter, it will fail because there is no gradient to use.
+And `step()` will simply skip that parameter, since it only updates parameters that have a gradient.
 
 So one can say:
 
@@ -105,37 +105,40 @@ class BadLinear(sadl.Function):
         return x @ self.W
 
 model = BadLinear()
-optimizer = sadl.SGD(list(model.parameters), lr=1e-2)
+optimizer = sadl.SGD(model.get_parameters(), lr=1e-2)
 
 x = sadl.tensor([[1.0, 2.0, 3.0]])
 loss = model(x).sum()
 
 optimizer.backward(loss)
-optimizer.step()  # fails: "unused.grad" is still None
+optimizer.step()  # "unused" is silently skipped, no gradient to use
 ```
 
-Here `self.unused` is a real `Parameter`, so it is included in `model.parameters` and therefore tracked by the optimizer.
+Here `self.unused` is a real `Parameter`, so it is included in `model.get_parameters()` and therefore tracked by the optimizer.
 But it is never used in `__call__`, so it never appears in the graph rooted at `loss`.
 That means backpropagation never reaches it.
 
+The optimizer does **not** raise an error in this case. It simply skips the parameter, because `step()` only updates parameters that are both trainable and have a non-`None` gradient.
+
 This is why the forward pass and the optimizer parameter list must agree.
 
-## Freezing or Excluding Parameters
+## Freezing Parameters
 
-The inverse is also true:
-if a parameter should **not** be optimized, it should not be part of the optimizer parameter list.
+To freeze parameters, simply set their `requires_grad` attribute to `False`.
 
-In other words, the optimizer should only receive the parameters you really want to update.
+The optimizer handles frozen parameters gracefully: `step()` skips any parameter whose `requires_grad` is `False` or whose `grad` is `None`. No error is raised.
 
-This is especially important because `Optimizer.step()` expects its tracked parameters to have gradients.
-So if you freeze parameters or want to exclude some of them, you should also exclude them from the optimizer.
+Per-parameter state (like momentum in SGD or running averages in Adam) is created **lazily**, on the first `step()` call where the parameter actually gets updated. This means:
+
+- Frozen parameters never allocate state, saving memory.
+- If a parameter is later unfrozen (by setting `requires_grad = True`), the optimizer creates its state automatically the next time `step()` runs.
 
 ## What the Base `Optimizer` Does
 
 The abstract base class `sadl.Optimizer` is responsible for:
 
-- storing the parameters to optimize
-- storing optimizer state tensors
+- storing the named parameters to optimize (as an `OrderedDict`)
+- storing optimizer state tensors (global and per-parameter)
 - performing backpropagation with `backward(loss)`
 - clearing gradients with `zero_grad(...)`
 - moving optimizer state with `copy_to_device(...)`
@@ -149,6 +152,32 @@ Some optimizers need additional tensors besides the parameters themselves.
 Typical examples are momentum vectors or running variance estimates.
 
 In `SADL`, these tensors form the optimizer state.
+
+The state is stored in a single `OrderedDict` (`_state`) with two levels:
+
+- **Global entries** like `lr`, `beta_1`, `t`, etc. sit at the top level.
+- **Per-parameter entries** live under the `params` key, keyed by the parameter's name in the model state dict (e.g. `layers[0].W`).
+
+For example, the internal state of an Adam optimizer might look like:
+
+```python
+optimizer._state = OrderedDict({
+    "lr": tensor(0.001),
+    "beta_1": tensor(0.9),
+    "beta_2": tensor(0.999),
+    "epsilon": tensor(1e-8),
+    "t": tensor(3),
+    "weight_decay": tensor(0.01),
+    "params": OrderedDict({
+        "layers[0].W": OrderedDict({"m": tensor(...), "v": tensor(...)}),
+        "layers[0].b": OrderedDict({"m": tensor(...), "v": tensor(...)}),
+        "layers[1].W": OrderedDict({"m": tensor(...), "v": tensor(...)}),
+        "layers[1].b": OrderedDict({"m": tensor(...), "v": tensor(...)}),
+    }),
+})
+```
+
+Per-parameter state is created lazily by `_get_or_create_param_state`, which calls the subclass hook `_init_param_state` the first time a parameter is encountered during `step()`.
 
 Important:
 the optimizer state is **not** the same thing as the parameters.
@@ -164,6 +193,18 @@ optimizer = optimizer.copy_to_device(device)
 
 Even though for vanilla SGD, the optimizer state may be empty.
 
+### Why string keys?
+
+The optimizer receives parameters as an `OrderedDict[str, Parameter]` from `model.get_parameters()`, and uses the same string names (like `"layers[0].W"`) to key both the parameters and their associated state.
+
+This is a design choice. An alternative would be to key by the `Parameter` object itself (as PyTorch does at runtime), which avoids coupling the optimizer to the model's naming scheme. However, in a framework where transparency is a core goal, string keys have clear advantages:
+
+- **Human-readable**: inspecting `optimizer._state["params"]` immediately shows which parameter each state entry belongs to.
+- **Naturally serializable**: saving and loading state requires no mapping layer —> the same string keys work on disk and at runtime.
+- **Consistent with `Function`**: the same names returned by `model.get_parameters()` appear in the optimizer state, so the two always agree.
+
+The tradeoff is that renaming model attributes invalidates saved optimizer state. In practice, model attribute names change far less often than the optimizer state gets saved and loaded.
+
 ## Built-In Optimizers
 
 `SADL` currently provides:
@@ -175,8 +216,10 @@ Even though for vanilla SGD, the optimizer state may be empty.
 
 ## Properties
 
+- `lr`: The learning rate (get/set).
 - `state`: View of all tensors belonging to the optimizer state.
 - `device`: Tuple of devices on which the optimizer state currently lives.
+- `update_params`: Iterator over `(name, param, grad)` pairs that are trainable and have a gradient.
 
 ## Methods
 
@@ -186,6 +229,36 @@ Even though for vanilla SGD, the optimizer state may be empty.
 - `get_state(to_device=None)`: Return the optimizer state as an `OrderedDict`.
 - `load_state(state, match_device, partial)`: Load optimizer state from an `OrderedDict`.
 - `copy_to_device(device)`: Move optimizer state to a target device.
+
+## Creating Custom Optimizers
+
+To create a custom optimizer, subclass `Optimizer` and implement `step()`.
+
+If the optimizer needs per-parameter state (like momentum or running averages), override `_init_param_state` and use `_get_or_create_param_state` in `step()`:
+
+```python
+import sadl
+from sadl.tensor import zeros_like
+
+class MyOptimizer(sadl.Optimizer):
+    def __init__(self, params, *, lr=1e-3):
+        super().__init__(params=params, lr=lr)
+
+    def _init_param_state(self, param):
+        return OrderedDict({
+            "velocity": zeros_like(param, dtype=param.dtype, requires_grad=False),
+        })
+
+    @sadl.no_grad_fn
+    def step(self):
+        lr = self.lr
+        for name, param, grad in self.update_params:
+            s = self._get_or_create_param_state(name, param)
+            s["velocity"] = 0.9 * s["velocity"] + grad
+            param[...] = param - lr * s["velocity"]
+```
+
+The base class handles everything else: state traversal, serialization, device management, and gradient clearing.
 
 ## Summary
 

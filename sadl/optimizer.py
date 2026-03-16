@@ -5,10 +5,11 @@ from abc import ABC, abstractmethod
 from collections import OrderedDict
 from collections.abc import Callable, Iterable, ValuesView
 from itertools import chain
+from typing import Any
 
 import numpy as np
 
-from .backend import TensorDevice
+from .backend import NDArray, TensorDevice
 from .grad_mode import no_grad, no_grad_fn
 from .tensor import Parameter, Tensor, ones_like, tensor, zeros_like
 from .utils import traverse_attrs
@@ -64,52 +65,122 @@ def toposort(root: Tensor) -> list[Tensor]:
 class Optimizer(ABC):
     """Abstract base class for all optimizers.
 
-    **All optimizer states must be of type `Tensor` or a collection of type `Tensor`**.
+    The optimizer state is stored in a single `OrderedDict` (`_state`) with
+    two levels:
+
+    - **Global entries** such as `lr`, `beta_1`, `t`, etc. sit at the top
+      level.
+    - **Per-parameter entries** live under the `"params"` key, keyed by the
+      parameter's name in the model state dict (e.g. `"layers[0].W"`).
+
+    Per-parameter state is created lazily: `_get_or_create_param_state` calls
+    the subclass hook `_init_param_state` the first time a parameter is
+    encountered during `step()`.  This means frozen parameters that are never
+    optimized never allocate state, and parameters that become trainable later
+    get their state on first use.
     """
 
-    def __init__(self, params: list[Parameter], *, lr: float = 1e-3) -> None:
+    def __init__(self, params: OrderedDict[str, Parameter], *, lr: float = 1e-3) -> None:
         """Initialize the optimizer.
 
         Args:
-            params (list[Parameter]): Parameters to optimize.
+            params (OrderedDict[str, Parameter]): Named parameters to optimize,
+                typically obtained via `model.get_parameters()`.
             lr (float, optional): The learning rate. Defaults to 1e-3.
         """
         if len(params) == 0:
             raise ValueError("Must pass at least one parameter to optimize.")
-        for param in params:
+        for name, param in params.items():
             if not isinstance(param, Parameter):
-                raise TypeError("All parameters passed to the optimizer must be of type Parameter.")
+                raise TypeError(
+                    f'Parameter "{name}" passed to the optimizer must be of type Parameter, '
+                    f"got {type(param).__name__}."
+                )
             if not param.keep_grad:
                 raise ValueError(
-                    "Attribute keep_grad must always be True for all parameters "
+                    f'Attribute keep_grad must always be True for parameter "{name}" '
                     "to avoid clearing gradients during the backward pass. "
                     "This is important for cases like gradient accumulation."
                 )
             if len(param.src) > 0:
                 raise ValueError(
-                    "Parameters should always be leafes and therefore "
+                    f'Parameter "{name}" should be a leaf and therefore '
                     "should not have any parents/src "
-                    "from which they were created."
+                    "from which it was created."
                 )
 
         self.params = params
-        self.lr = tensor(lr)
+        self._state: OrderedDict[str, Any] = OrderedDict(
+            {
+                "lr": tensor(lr),
+                "params": OrderedDict(),
+            }
+        )
+
+    def _init_param_state(self, param: Parameter) -> OrderedDict[str, Tensor]:  # noqa: ARG002
+        """Create the initial per-parameter state for *param*.
+
+        Override in subclasses that need per-parameter state (momentum,
+        variance estimates, etc.).  The base implementation returns an empty
+        dict, which is appropriate for stateless optimizers like vanilla SGD.
+
+        Args:
+            param (Parameter): The parameter to create state for.
+
+        Returns:
+            OrderedDict[str, Tensor]: The initial state for the parameter.
+        """
+        return OrderedDict()
+
+    def _get_or_create_param_state(self, name: str, param: Parameter) -> OrderedDict[str, Tensor]:
+        """Return the per-parameter state for *name*, creating it if absent.
+
+        Args:
+            name (str): The parameter's name in the model state dict.
+            param (Parameter): The parameter itself (passed through to
+                `_init_param_state` on first access).
+
+        Returns:
+            OrderedDict[str, Tensor]: The (possibly newly created) state dict
+                for this parameter.
+        """
+        param_states = self._state["params"]
+        if name not in param_states:
+            param_states[name] = self._init_param_state(param)
+        return param_states[name]
+
+    @property
+    def lr(self) -> Tensor:
+        """The learning rate."""
+        return self._state["lr"]
+
+    @lr.setter
+    def lr(self, value: Tensor) -> None:
+        """Set the learning rate.
+
+        Args:
+            value (Tensor): The new value for the learning rate.
+        """
+        self._state["lr"] = value
 
     def traverse_state(
         self,
         on_tensor: Callable[[str, Tensor], Tensor | None],
     ) -> None:
-        """Recursively traverse all Tensors and optionally transform them.
+        """Recursively traverse all Tensors in the optimizer state and optionally transform them.
+
+        Walks `_state` (which `traverse_attrs` reaches as an instance
+        attribute).  The model parameters stored in `self.params` are
+        explicitly excluded.
 
         Args:
-            on_tensor: Callback called for each Tensor with (path, param).
-                If it returns a Tensor, the original is replaced in-place.
+            on_tensor (Callable[[str, Tensor], Tensor | None]): Callback called for each
+                Tensor with (path, tensor). If it returns a Tensor, the original is replaced in-place.
                 If it returns None, no replacement occurs.
         """
 
         def on_tensor_wrapper(path: str, tensor: Tensor) -> Tensor | None:
             if path.startswith("params"):
-                # exlude param to optimize, see self.get_state for more
                 return None
             return on_tensor(path, tensor)
 
@@ -123,15 +194,31 @@ class Optimizer(ABC):
     def device(self) -> tuple[TensorDevice, ...]:
         """The devices on which the optimizer state is currently located.
 
-        Can be mutliple if the optimizer state is sharded across multiple
+        Can be multiple if the optimizer state is sharded across multiple
         devices.
 
         Returns:
             tuple[TensorDevice, ...]: The devices on which the optimizer
                 state is currently located. Empty, if the optimizer
-                has no parameters.
+                has no state tensors.
         """
-        return tuple({attr.device for attr in self.state})
+        return tuple({t.device for t in self.state})
+
+    @property
+    def update_params(self) -> Iterable[tuple[str, Parameter, NDArray]]:
+        """An iterator over `(name, param, grad)` triples that should be updated.
+
+        Filters out parameters that are frozen (`requires_grad is False`)
+        or that have no gradient yet.  Yielding `grad` as a separate element
+        gives the type checker proof that it is not `None`.
+
+        Returns:
+            Iterable[tuple[str, Parameter, NDArray]]: Iterator over
+                (name, param, grad) triples.
+        """
+        for name, param in self.params.items():
+            if param.requires_grad and param.grad is not None:
+                yield name, param, param.grad
 
     # "no_grad_fn" technically not needed here, as optimizer state Tensors
     # are leaves (not part of a computation graph). We still annotate
@@ -158,17 +245,18 @@ class Optimizer(ABC):
     # just to be safe.
     @no_grad_fn
     def get_state(self, to_device: TensorDevice | None = None) -> OrderedDict[str, Tensor]:
-        """The state of the optimizer.
+        """The state of the optimizer as a flat dict.
 
-        Note: Only **direct** attributes of the Optimizer class, which must be of type
-        **Tensor** or a collection of type **Tensor** will be considered in the state.
-        The `params` attribute, which stores references to the parameters to optimize
-        are **not** part of the optimizer state, and will be ignored!
+        Recursively collects all Tensors from `_state` (global and
+        per-parameter) into a single `OrderedDict` keyed by their
+        traversal path.  The `params` attribute (the parameters themselves)
+        is **not** part of the optimizer state.
 
         Args:
             to_device (TensorDevice | None): If specified, copy each
                 Tensor in the state to this device in the returned dict.
-                If `None`, the device of the Tensors is not changed. Defaults to None.
+                If `None`, the device of the Tensors is not changed.
+                Defaults to None.
 
         Returns:
             OrderedDict[str, Tensor]: Dict containing the state.
@@ -186,8 +274,7 @@ class Optimizer(ABC):
         """The Tensors forming the state of the optimizer.
 
         Returns:
-            ValuesView[Tensor]: A view over the
-                state Tensors.
+            ValuesView[Tensor]: A view over the state Tensors.
         """
         return self.get_state().values()
 
@@ -246,8 +333,6 @@ class Optimizer(ABC):
                 )
 
             tensor.data = init_data.data
-            # we do not return "init_data" here because we only want to
-            # modify the tensor **data** (the buffer), not the full object
             return  # Don't replace
 
         self.traverse_state(load_tensor)
@@ -366,7 +451,7 @@ class Optimizer(ABC):
         self._clear_graph(topo_nodes=node_order)
 
     def zero_grad(self, additional_tensors: list[Tensor] | None = None) -> None:
-        """Clears the gradiens of all parameters that are optimized.
+        """Clears the gradients of all parameters that are optimized.
 
         Applied to all parameters in `self.params`.
 
@@ -377,7 +462,7 @@ class Optimizer(ABC):
             they are not cleared before the backward pass of the graph
             they are part of. Defaults to None.
         """
-        for param in chain(self.params, additional_tensors or []):
+        for param in chain(self.params.values(), additional_tensors or []):
             param.grad = None
 
     @no_grad_fn
@@ -394,7 +479,7 @@ class SGD(Optimizer):
 
     def __init__(
         self,
-        params: list[Parameter],
+        params: OrderedDict[str, Parameter],
         *,
         lr: float = 1e-3,
         friction: float = 1,
@@ -411,13 +496,14 @@ class SGD(Optimizer):
         **SGDW:** `friction<1, weight_decay>0`
 
         Args:
-            params (list[Parameter]): Parameters to optimize.
-            lr (float, optional): The learing rate. Defaults to 1e-3.
+            params (OrderedDict[str, Parameter]): Named parameters to optimize,
+                typically obtained via `model.get_parameters()`.
+            lr (float, optional): The learning rate. Defaults to 1e-3.
             friction (float, optional): How much friction to apply on the
                 momentum. If friction is 1 (100%), then we do not use momentum,
                 as in every step all previous momentum is lost.
-                If momentum is desired, set `friction<1`. A typical value is `0.1`,
-                so 10% of momentum is lost every step due to friction.
+                If momentum is desired, set `friction<1`. A typical value is
+                `0.1`, so 10% of momentum is lost every step due to friction.
                 Defaults to 1.
             weight_decay (float, optional): Decay rate of the weights/parameters,
                 equals the weight of L2-regularization on the loss.
@@ -429,38 +515,49 @@ class SGD(Optimizer):
         if not 0 <= friction <= 1:
             raise ValueError(f"friction must be in [0, 1], got {friction}")
 
-        self.m: list[Tensor] | None = (
-            [zeros_like(p, dtype=p.dtype, requires_grad=False) for p in self.params]
-            if friction < 1
-            else None
-        )
+        self._state["friction"] = tensor(friction)
+        self._state["weight_decay"] = tensor(weight_decay)
+        self._use_momentum = friction < 1
 
-        self.friction = tensor(friction)
-        self.weight_decay = tensor(weight_decay)
+    def _init_param_state(self, param: Parameter) -> OrderedDict[str, Tensor]:
+        """Create the initial per-parameter state for *param*.
+
+        When using momentum, i.e. `friction < 1` this creates the momentum
+        store for `param`.
+
+        Args:
+            param (Parameter): The parameter to create state for.
+
+        Returns:
+            OrderedDict[str, Tensor]: The initial state for the parameter.
+                Empty if no momentum is used.
+        """
+        if self._use_momentum:
+            return OrderedDict({"m": zeros_like(param, dtype=param.dtype, requires_grad=False)})
+        return OrderedDict()
 
     @no_grad_fn
     def step(self) -> None:
-        """Performs a single gradient descent step.
+        """Performs a single gradient descent step."""
+        lr = self.lr
+        friction = self._state["friction"]
+        weight_decay = self._state["weight_decay"]
 
-        Raises:
-            ValueError: If a parameter has no gradient.
-        """
-        for idx, param in enumerate(self.params):
-            if param.grad is None:
-                raise ValueError("Gradient of parameter must not be None in step function")
+        for name, param, grad in self.update_params:
+            s = self._get_or_create_param_state(name, param)
 
-            if self.m is not None:
-                # we lose momentum through "friction", the momentum remaining from the previous step
-                # is (1-self.friction)
+            if "m" in s:
+                # we lose momentum through "friction", the momentum remaining
+                # from the previous step is (1-friction)
                 # we add param.grad as new force from the current position
-                self.m[idx] = (1 - self.friction) * self.m[idx] + param.grad
-                grad = self.m[idx].data
+                s["m"] = (1 - friction) * s["m"] + grad
+                effective_grad = s["m"].data
             else:
-                grad = param.grad
+                effective_grad = grad
 
             param[...] = (
-                (1 - self.lr * self.weight_decay) * param  # weight decay part
-                - self.lr * grad  # gradient part
+                (1 - lr * weight_decay) * param  # weight decay part
+                - lr * effective_grad  # gradient part
             )
 
 
@@ -469,7 +566,7 @@ class Adam(Optimizer):
 
     def __init__(
         self,
-        params: list[Parameter],
+        params: OrderedDict[str, Parameter],
         *,
         lr: float = 1e-3,
         beta_1: float = 0.9,
@@ -482,7 +579,8 @@ class Adam(Optimizer):
         Note: By setting `weight_decay` > 0 this becomes `AdamW`.
 
         Args:
-            params (list[Parameter]): Parameters to optimize.
+            params (OrderedDict[str, Parameter]): Named parameters to optimize,
+                typically obtained via `model.get_parameters()`.
             lr (float, optional): The learning rate, also called `alpha`
                 in the paper. Defaults to 1e-3.
             beta_1 (float, optional): Exponential decay rate for
@@ -498,17 +596,29 @@ class Adam(Optimizer):
                 Defaults to `0`, meaning vanilla Adam is used.
         """
         super().__init__(params=params, lr=lr)
-        self.m: list[Tensor] = [
-            zeros_like(p, dtype=p.dtype, requires_grad=False) for p in self.params
-        ]
-        self.v: list[Tensor] = [
-            zeros_like(p, dtype=p.dtype, requires_grad=False) for p in self.params
-        ]
-        self.beta_1 = tensor(beta_1)
-        self.beta_2 = tensor(beta_2)
-        self.epsilon = tensor(epsilon)
-        self.t = tensor(0)
-        self.weight_decay = tensor(weight_decay)
+        self._state["beta_1"] = tensor(beta_1)
+        self._state["beta_2"] = tensor(beta_2)
+        self._state["epsilon"] = tensor(epsilon)
+        self._state["t"] = tensor(0)
+        self._state["weight_decay"] = tensor(weight_decay)
+
+    def _init_param_state(self, param: Parameter) -> OrderedDict[str, Tensor]:
+        """Create the initial per-parameter state for *param*.
+
+        Creates the moving average stores for `param`.
+
+        Args:
+            param (Parameter): The parameter to create state for.
+
+        Returns:
+            OrderedDict[str, Tensor]: The initial state for the parameter.
+        """
+        return OrderedDict(
+            {
+                "m": zeros_like(param, dtype=param.dtype, requires_grad=False),
+                "v": zeros_like(param, dtype=param.dtype, requires_grad=False),
+            }
+        )
 
     @no_grad_fn
     def step(self) -> None:
@@ -516,27 +626,29 @@ class Adam(Optimizer):
 
         Uses the slightly more efficient variant, which
         can be found at the end of section 2 in the paper: https://arxiv.org/pdf/1412.6980
-
-        Raises:
-            ValueError: If a parameter has no gradient.
         """
-        self.t = self.t + 1
+        self._state["t"] = self._state["t"] + 1
 
-        for idx, param in enumerate(self.params):
-            if param.grad is None:
-                raise ValueError("Gradient of parameter must not be None in step function")
+        t = self._state["t"]
+        beta_1 = self._state["beta_1"]
+        beta_2 = self._state["beta_2"]
+        epsilon = self._state["epsilon"]
+        weight_decay = self._state["weight_decay"]
+        lr = self.lr
 
-            self.m[idx] = self.beta_1 * self.m[idx] + (1 - self.beta_1) * param.grad
-            self.v[idx] = self.beta_2 * self.v[idx] + (1 - self.beta_2) * param.grad**2
+        for name, param, grad in self.update_params:
+            s = self._get_or_create_param_state(name, param)
 
-            lr_t = self.lr * np.sqrt(1 - self.beta_2**self.t) / (1 - self.beta_1**self.t)
+            s["m"] = beta_1 * s["m"] + (1 - beta_1) * grad
+            s["v"] = beta_2 * s["v"] + (1 - beta_2) * grad**2
 
-            epsilon_hat = self.epsilon * np.sqrt(1 - self.beta_2**self.t)
+            lr_t = lr * np.sqrt(1 - beta_2**t) / (1 - beta_1**t)
+            epsilon_hat = epsilon * np.sqrt(1 - beta_2**t)
 
             # [...] -> in-place assignment
             param[...] = (
-                (1 - self.lr * self.weight_decay) * param  # weight decay part
-                - lr_t * self.m[idx] / (np.sqrt(self.v[idx]) + epsilon_hat)  # gradient part
+                (1 - lr * weight_decay) * param  # weight decay part
+                - lr_t * s["m"] / (np.sqrt(s["v"]) + epsilon_hat)  # gradient part
             )
 
 

@@ -183,30 +183,6 @@ class Tensor(NDArrayOperatorsMixin):
         """
         return self.data.dtype
 
-    def astype(self, dtype: npt.DTypeLike) -> Tensor:
-        """Return a copy of this Tensor cast to `dtype`.
-
-        If `dtype` already matches, the original Tensor is returned as-is
-        (no copy, no graph node). Otherwise a new Tensor is created whose
-        underlying data has been cast. When gradient tracking is active and
-        this Tensor is a non-leaf node in the computation graph, the cast is
-        recorded so that gradients flow back through it (by casting the
-        upstream gradient back to the original dtype).
-
-        Note: This operation focuses on the underlying data, not the
-        computation graph. It does not accept an `in_place` flag: Mutating
-        dtype in-place on a non-leaf tensor would silently corrupt any
-        subsequent backward pass.
-
-        Args:
-            dtype (npt.DTypeLike): The target dtype.
-
-        Returns:
-            Tensor: A Tensor with the requested dtype. Returns `self` if the
-                dtype is already correct.
-        """
-        return ops.astype(self, dtype=dtype)
-
     def is_leaf(self) -> bool:
         """Whether this Tensor is a leaf in a computation graph.
 
@@ -457,7 +433,9 @@ class Parameter(Tensor):
             return self
 
         new_data = copy_array(self.data, device)
-        return Parameter(new_data, is_training=self.is_training)
+        new_param = Parameter(new_data, is_training=self.is_training)
+        new_param.requires_grad = self.requires_grad
+        return new_param
 
 
 def tensor(

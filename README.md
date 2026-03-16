@@ -81,7 +81,7 @@ output = model(x)
 loss = np.sum(output)
 
 # Backward pass and optimization
-optimizer = sadl.SGD(list(model.parameters), lr=0.01)
+optimizer = sadl.SGD(model.get_parameters(), lr=0.01)
 optimizer.backward(loss)
 optimizer.step()
 optimizer.zero_grad()
@@ -179,6 +179,22 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, commands, and guid
 ## Code of Conduct
 
 See [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for behavior guidelines. The file was created using the [Contributor Covenant](https://www.contributor-covenant.org).
+
+## Limitations
+
+SADL is an educational framework. It is designed to be readable and complete enough to train real models, but it is not a production framework and does not try to be.
+
+**Performance.** All computation runs through NumPy (or CuPy on GPU). For small models and experiments this is perfectly fine. For large-scale training, a production framework will be orders of magnitude faster.
+
+**Operation coverage.** Only operations that have a registered backward function in the grad op registry can be differentiated. The current set covers the most common families (arithmetic, trigonometric, reductions, matmul, reshape, astype), but many NumPy functions that are less common in deep learning do not have gradients yet. Calling an unsupported operation on a Tensor that requires gradients will raise an error.
+
+**No in-place differentiation.** In-place mutations on Tensors that participate in a computation graph (like `x += 1` on a non-leaf) are not tracked and will silently produce incorrect gradients. Parameter updates via `param[...] = ...` in optimizer `step()` are fine because they happen *after* the backward pass.
+
+**Single backward pass.** The computation graph is consumed during backpropagation: source references and gradients on intermediate nodes are cleaned up after traversal. This means you cannot call `backward` twice on the same graph. If you need to, you have to recompute the forward pass.
+
+**No higher-order gradients.** SADL builds a flat computation graph. There is no support for differentiating through the backward pass itself, so second-order methods or gradient penalties that require `grad(grad(...))` are not possible.
+
+**Array creation does not return Tensors.** NumPy creation routines like `np.zeros_like` or `np.eye` do not start from an existing Tensor, so there is nothing to dispatch the operation back into SADL. Use `sadl.zeros`, `sadl.ones`, `sadl.eye`, or `sadl.tensor` instead.
 
 ## Future Plans
 

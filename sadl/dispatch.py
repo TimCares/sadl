@@ -9,6 +9,7 @@ from .backend import (
     TensorDevice,
     get_array_module_from_device,
     is_ndarray,
+    is_ndarray_like,
 )
 from .grad_mode import is_global_grad_mode_enabled
 from .grad_ops import get_grad_op
@@ -150,8 +151,14 @@ def dispatch_op(
     if not grad_tracking:
         return Tensor(result, requires_grad=False)
 
-    # ensure we always have Tensors in the graph:
-    src = tuple(_to_tensor(i, device=device) for i in op_inputs)
+    # Only include actual data operands (Tensors, arrays, numeric scalars) in the
+    # graph. Metadata arguments like dtype classes or shape tuples must be excluded
+    # so they don't become weird graph nodes.
+    src = tuple(
+        _to_tensor(i, device=device)
+        for i in op_inputs
+        if isinstance(i, Tensor) or is_ndarray_like(i)
+    )
 
     result_requires_grad = any(elem.requires_grad for elem in src)
 
