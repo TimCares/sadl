@@ -23,17 +23,17 @@ If we do not remember that path, we cannot walk it backwards during backpropagat
 
 We can express that idea like this:
 
-$$
+```math
 \frac{\partial \mathcal{L}}{\partial w}
 =
 \frac{\partial \mathcal{L}}{\partial z_n}
-*
+\cdot
 \ldots
-*
+\cdot
 \frac{\partial z_2}{\partial z_1}
-*
+\cdot
 \frac{\partial z_1}{\partial w}
-$$
+```
 
 Where `z` is some intermediate result.
 
