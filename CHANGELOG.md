@@ -2,6 +2,23 @@
 
 <!-- version list -->
 
+## v2.0.0 (2026-03-16)
+
+### Documentation
+
+- **autograd**: Fixed error in chain rule formula rendering
+  ([`04bedf5`](https://github.com/TimCares/sadl/commit/04bedf57d0d304dd0ade8c24b8da12a550e34294))
+
+### Features
+
+- **optimizer**: Added dynamic and lazy optimizer state handling
+  ([`6f2bf38`](https://github.com/TimCares/sadl/commit/6f2bf388c316898d6590959e8876e608ba9da38a))
+
+### Breaking Changes
+
+- **optimizer**: Optimizer now expects an OrderedDict for parameters instead of a list
+
+
 ## v1.4.0 (2026-03-15)
 
 ### Bug Fixes
